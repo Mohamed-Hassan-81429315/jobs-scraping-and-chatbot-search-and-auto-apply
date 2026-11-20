@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\Source;
+use App\Services\JobSearch;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -21,13 +22,29 @@ class JobController extends Controller
         ];
     }
 
-    public function index(Request $request)
+    public function index(Request $request, JobSearch $search)
     {
         $request->validate([
             'q'      => 'nullable|string|max:100',
             'source' => 'nullable|string|max:100',
+            'page'   => 'nullable|integer|min:1',
         ]);
 
+        try {
+            return $search->search(
+                trim((string) $request->query('q')),
+                (string) $request->query('source'),
+                (int) $request->query('page', 1)
+            );
+        } catch (\Throwable $e) {
+            // Elasticsearch is down or not indexed yet: use the MySQL search instead.
+            report($e);
+            return $this->mysqlSearch($request);
+        }
+    }
+
+    private function mysqlSearch(Request $request)
+    {
         $query = Job::with(['company:id,name', 'source:id,name', 'tags:id,name'])
             ->select(['id', 'title', 'location', 'url', 'posted_at', 'source_id', 'company_id', 'description']);
 
@@ -50,7 +67,7 @@ class JobController extends Controller
         return $query
             ->orderByRaw('posted_at IS NULL')
             ->orderByDesc('posted_at')
-            ->paginate(12)
+            ->paginate(JobSearch::PER_PAGE)
             ->through(fn ($j) => [
                 'id'        => $j->id,
                 'title'     => $j->title,
