@@ -1,0 +1,26 @@
+cat >> .gitignore <<'EOF'
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+
+# Logs
+*.log
+
+# Node.js
+node_modules/
+
+# Build files
+dist/
+build/
+EOF
