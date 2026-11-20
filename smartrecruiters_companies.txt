@@ -1,0 +1,6 @@
+# One company per line: a slug or a full URL. Lines starting with # are ignored.
+# Wrong or disabled slugs are skipped with a warning, so verify these.
+Visa
+BoschGroup
+Ubisoft2
+SmartRecruiters

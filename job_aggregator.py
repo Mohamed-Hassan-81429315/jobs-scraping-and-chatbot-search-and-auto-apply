@@ -640,7 +640,7 @@ def epam_parse_vacancy(url, html):
     return job("epam", title, "EPAM", None, url, None, None)
 
 
-def fetch_epam(max_vacancies=100, workers=EPAM_WORKERS):
+def fetch_epam(max_vacancies=100, workers=EPAM_WORKERS, known_urls=None):
     """
     Fetch EPAM vacancy pages concurrently.
 
@@ -657,6 +657,11 @@ def fetch_epam(max_vacancies=100, workers=EPAM_WORKERS):
     except Exception as exc:
         print(f"[error] EPAM link collection failed: {exc}")
         return
+
+    if known_urls:
+        before = len(links)
+        links = [u for u in links if u not in known_urls]
+        print(f"epam: {before - len(links)} already stored, skipping them")
 
     if max_vacancies > 0:
         links = links[:max_vacancies]
@@ -730,7 +735,12 @@ def run(out="jobs.json", include_themuse=False, epam_limit=100,
         )
 
     # Use a wrapper so the EPAM limit can be passed to its fetcher.
-    sources.append(lambda: fetch_epam(max_vacancies=epam_limit))
+    known_epam = {
+        item.get("url") for item in jobs.values() if item.get("source") == "epam"
+    }
+    sources.append(
+        lambda: fetch_epam(max_vacancies=epam_limit, known_urls=known_epam)
+    )
 
     for fetcher in sources:
         source_name = getattr(fetcher, "__name__", "fetch_epam")
@@ -814,8 +824,10 @@ if __name__ == "__main__":
     if args.smartrecruiters_limit < 0:
         parser.error("--smartrecruiters-limit must be zero or a positive number.")
 
-    smartrecruiters_companies = load_smartrecruiters_companies(
-        args.smartrecruiters_companies
+    # SmartRecruiters is handled by run_smartrecruiters.py (skips known jobs)
+    smartrecruiters_companies = (
+        load_smartrecruiters_companies(args.smartrecruiters_companies)
+        if args.smartrecruiters_companies else []
     )
 
     while True:

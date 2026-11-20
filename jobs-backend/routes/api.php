@@ -5,3 +5,4 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/stats', [JobController::class, 'stats']);
 Route::get('/jobs', [JobController::class, 'index']);
+Route::get('/suggest', [JobController::class, 'suggest']);

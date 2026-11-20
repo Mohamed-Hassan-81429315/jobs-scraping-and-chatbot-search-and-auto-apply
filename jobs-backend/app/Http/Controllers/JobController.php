@@ -24,22 +24,35 @@ class JobController extends Controller
 
     public function index(Request $request, JobSearch $search)
     {
-        $request->validate([
-            'q'      => 'nullable|string|max:100',
-            'source' => 'nullable|string|max:100',
-            'page'   => 'nullable|integer|min:1',
+        $params = $request->validate([
+            'q'        => 'nullable|string|max:100',
+            'source'   => 'nullable|string|max:100',
+            'location' => 'nullable|string|max:150',
+            'company'  => 'nullable|string|max:255',
+            'posted'   => 'nullable|in:24h,7d,30d',
+            'remote'   => 'nullable|boolean',
+            'sort'     => 'nullable|in:relevance,newest',
+            'page'     => 'nullable|integer|min:1',
         ]);
 
         try {
-            return $search->search(
-                trim((string) $request->query('q')),
-                (string) $request->query('source'),
-                (int) $request->query('page', 1)
-            );
+            return $search->search($params);
         } catch (\Throwable $e) {
-            // Elasticsearch is down or not indexed yet: use the MySQL search instead.
+            // Elasticsearch is down or not indexed yet: use the basic MySQL search.
             report($e);
             return $this->mysqlSearch($request);
+        }
+    }
+
+    public function suggest(Request $request, JobSearch $search)
+    {
+        $data = $request->validate(['q' => 'nullable|string|max:60']);
+
+        try {
+            return $search->suggest($data['q'] ?? '');
+        } catch (\Throwable $e) {
+            report($e);
+            return ['titles' => [], 'companies' => [], 'locations' => []];
         }
     }
 
@@ -77,6 +90,7 @@ class JobController extends Controller
                 'url'       => $j->url,
                 'posted_at' => $j->posted_at?->toIso8601String(),
                 'excerpt'   => Str::limit(trim(preg_replace('/\s+/', ' ', strip_tags(html_entity_decode((string) $j->description)))), 220),
+                'remote'    => false,
                 'tags'      => $j->tags->pluck('name')->take(6)->values(),
             ]);
     }

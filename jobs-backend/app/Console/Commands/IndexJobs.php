@@ -34,6 +34,11 @@ class IndexJobs extends Command
                         strip_tags(html_entity_decode((string) $job->description))
                     ) ?? '');
 
+                    $tags     = $job->tags->pluck('name')->values()->all();
+                    $haystack = mb_strtolower($job->title . ' ' . $job->location . ' ' . implode(' ', $tags));
+                    $remote   = in_array($job->source->name, ['remoteok', 'remotive'], true)
+                        || (bool) preg_match('/\bremote\b|home\s?-?office|work from home|\bwfh\b/u', $haystack);
+
                     $docs[$job->id] = [
                         'title'       => $job->title,
                         'company'     => $job->company->name,
@@ -43,7 +48,8 @@ class IndexJobs extends Command
                         'posted_at'   => $job->posted_at?->toIso8601String(),
                         'description' => mb_substr($plain, 0, 20000),
                         'excerpt'     => Str::limit($plain, 220),
-                        'tags'        => $job->tags->pluck('name')->values()->all(),
+                        'tags'        => $tags,
+                        'remote'      => $remote,
                     ];
 
                     $bar->advance();
