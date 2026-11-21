@@ -23,4 +23,15 @@ node_modules/
 # Build files
 dist/
 build/
-EOF
+EOFjobs.json
+
+# Scraping data
+jobs.json
+jobs.json.tmp
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
