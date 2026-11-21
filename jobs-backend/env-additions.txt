@@ -1,0 +1,5 @@
+# ADD to jobs-backend/.env
+APP_NAME=Applyra
+FRONTEND_URL=http://localhost:3000
+MAIL_FROM_NAME="Applyra"
+# For local testing keep MAIL_MAILER=log and read the reset link in storage/logs/laravel.log

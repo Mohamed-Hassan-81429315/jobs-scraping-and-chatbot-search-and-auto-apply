@@ -3,123 +3,132 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    private const TOKEN_DAYS = 30;
+    private function passwordRules(): PasswordRule
+    {
+        return PasswordRule::min(8)->letters()->numbers();
+    }
+
+    private function issueToken(User $user): string
+    {
+        return $user->createToken('web')->plainTextToken;
+    }
 
     public function register(Request $request): JsonResponse
     {
-        $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
-
         $data = $request->validate([
-            'name'     => ['required', 'string', 'min:2', 'max:100'],
-            'email'    => ['required', 'string', 'email:rfc', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'confirmed', Password::min(8)->letters()->numbers()],
+            'name' => ['required', 'string', 'max:80'],
+            'email' => ['required', 'string', 'email:rfc', 'max:255', 'unique:users,email'],
+            'password' => ['required', 'confirmed', $this->passwordRules()],
         ]);
 
         $user = User::create([
-            'name'     => trim($data['name']),
-            'email'    => $data['email'],
-            'password' => $data['password'], // hashed by the model cast
+            'name' => trim($data['name']),
+            'email' => Str::lower($data['email']),
+            'password' => Hash::make($data['password']),
         ]);
 
-        return $this->issueToken($user, 201);
+        return response()->json([
+            'user' => $user->only(['id', 'name', 'email']),
+            'token' => $this->issueToken($user),
+        ], 201);
     }
 
     public function login(Request $request): JsonResponse
     {
-        $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
-
         $data = $request->validate([
-            'email'    => ['required', 'string', 'email'],
+            'email' => ['required', 'string', 'email'],
             'password' => ['required', 'string'],
         ]);
 
-        $key = 'login:' . $data['email'] . '|' . $request->ip();
+        $user = User::where('email', Str::lower($data['email']))->first();
 
-        if (RateLimiter::tooManyAttempts($key, 5)) {
-            $seconds = RateLimiter::availableIn($key);
-
-            throw ValidationException::withMessages([
-                'email' => ["Too many attempts. Try again in {$seconds} seconds."],
-            ])->status(429);
-        }
-
-        $user = User::where('email', $data['email'])->first();
-
-        if (!$user || !Hash::check($data['password'], $user->password)) {
-            RateLimiter::hit($key, 60);
-
+        if (! $user || ! Hash::check($data['password'], $user->password)) {
+            // One generic message: never reveal which half was wrong.
             throw ValidationException::withMessages([
                 'email' => ['These credentials do not match our records.'],
             ]);
         }
 
-        RateLimiter::clear($key);
-
-        return $this->issueToken($user);
+        return response()->json([
+            'user' => $user->only(['id', 'name', 'email']),
+            'token' => $this->issueToken($user),
+        ]);
     }
 
     public function me(Request $request): JsonResponse
     {
-        return response()->json(['user' => $this->present($request->user())]);
+        return response()->json(['user' => $request->user()->only(['id', 'name', 'email'])]);
     }
 
     public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()->delete();
 
-        return response()->json(['message' => 'Logged out.']);
+        return response()->json(['message' => 'You have been signed out.']);
     }
 
     public function updatePassword(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'current_password' => ['required', 'string'],
-            'password'         => [
-                'required', 'string', 'confirmed', 'different:current_password',
-                Password::min(8)->letters()->numbers(),
-            ],
+            'current_password' => ['required', 'current_password:sanctum'],
+            'password' => ['required', 'confirmed', 'different:current_password', $this->passwordRules()],
         ]);
 
         $user = $request->user();
+        $user->forceFill(['password' => Hash::make($data['password'])])->save();
 
-        if (!Hash::check($data['current_password'], $user->password)) {
+        // Sign out every other device; keep this session alive.
+        $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+
+        return response()->json(['message' => 'Your password has been updated.']);
+    }
+
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $data = $request->validate(['email' => ['required', 'email']]);
+
+        Password::sendResetLink(['email' => Str::lower($data['email'])]);
+
+        // Same answer whether or not the account exists (prevents email enumeration).
+        return response()->json([
+            'message' => 'If an account exists for that email, a reset link is on its way.',
+        ]);
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'confirmed', $this->passwordRules()],
+        ]);
+
+        $status = Password::reset(
+            [...$request->only('email', 'token'), 'password' => $data['password'], 'password_confirmation' => $request->input('password_confirmation')],
+            function (User $user, string $password) {
+                $user->forceFill(['password' => Hash::make($password), 'remember_token' => Str::random(60)])->save();
+                $user->tokens()->delete();
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
             throw ValidationException::withMessages([
-                'current_password' => ['Your current password is incorrect.'],
+                'email' => ['This reset link is invalid or has expired. Request a new one.'],
             ]);
         }
 
-        $user->forceFill(['password' => $data['password']])->save();
-
-        // Sign out every other device; keep this session.
-        $current = $user->currentAccessToken();
-        $user->tokens()->where('id', '!=', $current->id)->delete();
-
-        return response()->json(['message' => 'Password updated.']);
-    }
-
-    private function issueToken(User $user, int $status = 200): JsonResponse
-    {
-        $token = $user->createToken('web', ['*'], now()->addDays(self::TOKEN_DAYS));
-
-        return response()->json([
-            'user'       => $this->present($user),
-            'token'      => $token->plainTextToken,
-            'expires_at' => $token->accessToken->expires_at?->toIso8601String(),
-        ], $status);
-    }
-
-    private function present(User $user): array
-    {
-        return ['id' => $user->id, 'name' => $user->name, 'email' => $user->email];
+        return response()->json(['message' => 'Password reset. You can sign in now.']);
     }
 }

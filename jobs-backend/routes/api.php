@@ -18,3 +18,6 @@ Route::prefix('auth')->group(function () {
         Route::put('/password', [AuthController::class, 'updatePassword']);
     });
 });
+Route::post('/forgot-password', [\App\Http\Controllers\AuthController::class, 'forgotPassword'])->middleware('throttle:10,1');
+Route::post('/reset-password', [\App\Http\Controllers\AuthController::class, 'resetPassword'])->middleware('throttle:10,1');
+Route::post('/update-password', [\App\Http\Controllers\AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
