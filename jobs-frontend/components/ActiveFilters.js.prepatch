@@ -1,0 +1,33 @@
+import Link from 'next/link';
+import { buildHref } from '../lib/params';
+
+const POSTED = { '24h': 'Past 24 hours', '7d': 'Past 7 days', '30d': 'Past 30 days' };
+
+export default function ActiveFilters({ params }) {
+  const chips = [];
+  if (params.q) chips.push(['Search', `“${params.q}”`, { q: '' }]);
+  if (params.remote) chips.push(['Work type', 'Remote', { remote: '' }]);
+  if (params.location) chips.push(['Location', params.location, { location: '' }]);
+  if (params.company) chips.push(['Company', params.company, { company: '' }]);
+  if (params.source) chips.push(['Platform', params.source, { source: '' }]);
+  if (params.posted) chips.push(['Posted', POSTED[params.posted], { posted: '' }]);
+
+  if (!chips.length) return null;
+
+  return (
+    <div className="active">
+      <ul className="active-list" aria-label="Active filters">
+        {chips.map(([kind, label, clear]) => (
+          <li key={kind}>
+            <Link className="chipx" href={buildHref(params, clear)} prefetch={false} scroll={false}>
+              <span><span className="sr">{kind}: </span><b>{label}</b></span>
+              <span aria-hidden="true">×</span>
+              <span className="sr"> (remove filter)</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <Link href="/" className="clear-all" prefetch={false}>Clear all</Link>
+    </div>
+  );
+}
