@@ -1,0 +1,6 @@
+# One search per line. Each line costs one API request per page.
+# Add a place like "software engineer in Berlin, Germany" to focus a search.
+software engineer
+odoo developer
+data analyst
+project manager
