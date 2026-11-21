@@ -1,0 +1,106 @@
+import Link from 'next/link';
+import { buildHref } from '../lib/params';
+import { platformLabel } from '../lib/platforms';
+
+function Option({ href, label, count, selected, cap }) {
+  return (
+    <li>
+      <Link
+        href={href}
+        className={selected ? 'opt selected' : 'opt'}
+        aria-current={selected ? 'true' : undefined}
+        prefetch={false}
+        scroll={false}
+      >
+        <span className="box" aria-hidden="true">{selected ? '✓' : ''}</span>
+        <span className={cap ? 'opt-label cap' : 'opt-label'}>{label}</span>
+        {typeof count === 'number' && <span className="opt-count">{count.toLocaleString('en-US')}</span>}
+      </Link>
+    </li>
+  );
+}
+
+function withSelected(list, selected) {
+  if (!selected || list.some((i) => i.key === selected)) return list;
+  return [{ key: selected, count: undefined }, ...list];
+}
+
+const POSTED = [
+  ['24h', 'Past 24 hours'],
+  ['7d', 'Past 7 days'],
+  ['30d', 'Past 30 days'],
+];
+
+export default function FilterSidebar({ params, facets }) {
+  const toggle = (key, value) => buildHref(params, { [key]: params[key] === value ? '' : value });
+  const sources = withSelected(facets.sources, params.source);
+  const locations = withSelected(facets.locations, params.location);
+  const companies = withSelected(facets.companies, params.company);
+
+  return (
+    <div className="filters">
+      <h2 className="sr">Filters</h2>
+
+      <section aria-labelledby="f-date">
+        <h3 id="f-date">Date posted</h3>
+        <ul>
+          <Option href={buildHref(params, { posted: '' })} label="Any time" selected={!params.posted} />
+          {POSTED.map(([key, label]) => (
+            <Option
+              key={key}
+              href={toggle('posted', key)}
+              label={label}
+              count={facets.posted?.[key]}
+              selected={params.posted === key}
+            />
+          ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="f-type">
+        <h3 id="f-type">Work type</h3>
+        <ul>
+          <Option
+            href={buildHref(params, { remote: params.remote ? '' : '1' })}
+            label="Remote only"
+            count={facets.remote}
+            selected={Boolean(params.remote)}
+          />
+        </ul>
+      </section>
+
+      {sources.length > 0 && (
+        <section aria-labelledby="f-source">
+          <h3 id="f-source">Platform</h3>
+          <ul>
+            {sources.map((s) => (
+              <Option key={s.key} href={toggle('source', s.key)} label={platformLabel(s.key)} count={s.count} selected={params.source === s.key} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {locations.length > 0 && (
+        <section aria-labelledby="f-location">
+          <h3 id="f-location">Location</h3>
+          <ul>
+            {locations.map((l) => (
+              <Option key={l.key} href={toggle('location', l.key)} label={l.key} count={l.count} selected={params.location === l.key} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {companies.length > 0 && (
+        <section aria-labelledby="f-company">
+          <h3 id="f-company">Company</h3>
+          <ul>
+            {companies.map((c) => (
+              <Option key={c.key} href={toggle('company', c.key)} label={c.key} count={c.count} selected={params.company === c.key} />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
