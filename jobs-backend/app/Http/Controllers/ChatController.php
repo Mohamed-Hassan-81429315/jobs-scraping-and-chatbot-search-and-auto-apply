@@ -2,174 +2,184 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\JobSearch;
+use App\Services\Chat\JobAssistant;
+use App\Services\Chat\MistralException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\RateLimiter;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ChatController extends Controller
 {
-    private const PLATFORMS = [
-        'linkedin'        => 'LinkedIn',
-        'indeed'          => 'Indeed',
-        'glassdoor'       => 'Glassdoor',
-        'odoo'            => 'Odoo',
-        'smartrecruiters' => 'SmartRecruiters',
-        'epam'            => 'EPAM',
-        'remoteok'        => 'RemoteOK',
-        'remotive'        => 'Remotive',
-        'arbeitnow'       => 'Arbeitnow',
-    ];
-
-    private const STOPWORDS = [
-        'a', 'an', 'the', 'i', 'me', 'my', 'we', 'you', 'is', 'are', 'am', 'can', 'could', 'would', 'please',
-        'find', 'show', 'search', 'get', 'give', 'list', 'look', 'looking', 'want', 'need', 'any', 'some',
-        'job', 'jobs', 'position', 'positions', 'role', 'roles', 'opening', 'openings', 'vacancy', 'vacancies',
-        'work', 'for', 'in', 'at', 'near', 'around', 'on', 'of', 'to', 'with', 'from', 'and', 'available',
-        'latest', 'newest', 'recent', 'new', 'there', 'do', 'have', 'has', 'about', 'related', 'that',
-    ];
-
-    public function message(Request $request, JobSearch $search): JsonResponse
+    /** One-shot JSON answer (kept as a fallback for clients that cannot stream). */
+    public function message(Request $request): JsonResponse
     {
-        $data  = $request->validate(['message' => ['required', 'string', 'max:300']]);
-        $text  = trim((string) preg_replace('/\s+/u', ' ', $data['message']));
-        $lower = Str::lower($text);
-
-        if (preg_match('/^(hi|hello|hey|hola|salam|help|start|menu)\b/u', $lower)
-            || str_contains($lower, 'what can you do')) {
-            return $this->reply(
-                "Hi! I can search every job in our database for you. Tell me a job title, skill, company or city, "
-                . "and optionally a platform, \"remote\", or how recent the job should be.\n\n"
-                . 'Try: remote Python jobs this week, Odoo developer, or data analyst in Berlin.'
-            );
+        $apiKey = $this->apiKey($request);
+        if ($apiKey === null) {
+            return $this->keyRequired();
         }
 
-        if (preg_match('/\b(thanks|thank you|thx)\b/u', $lower)) {
-            return $this->reply('You are welcome! Ask me for another search any time.');
-        }
+        $data = $this->validated($request);
 
-        [$q, $source, $posted, $remote, $notes] = $this->parse($lower);
-
-        if ($q === '' && $source === '' && $posted === '' && !$remote) {
-            return $this->reply('What should I look for? Give me a job title, skill, company or city, for example "React developer in Cairo".');
+        if ($limited = $this->limited($apiKey)) {
+            return $limited;
         }
 
         try {
-            $result = $search->search([
-                'q'      => $q,
-                'source' => $source,
-                'posted' => $posted,
-                'remote' => $remote ? '1' : '',
-                'sort'   => $q === '' ? 'newest' : '',
-                'page'   => 1,
-            ]);
+            return response()->json($this->assistant($apiKey, $data));
+        } catch (MistralException $e) {
+            return response()->json($this->errorBody($e), $this->errorStatus($e));
         } catch (\Throwable $e) {
             report($e);
 
-            return $this->reply('The job search is temporarily unavailable. Please try again in a moment.');
+            return response()->json($this->genericError(), 500);
+        }
+    }
+
+    /**
+     * Server-sent events:
+     *   status {stage}   planning | searching | ranking | writing
+     *   jobs   {jobs,total}
+     *   token  {t}       pieces of the answer as Mistral writes it
+     *   done   {...}     the complete final payload
+     *   error  {code,reply}
+     */
+    public function stream(Request $request): StreamedResponse|JsonResponse
+    {
+        $apiKey = $this->apiKey($request);
+        if ($apiKey === null) {
+            return $this->keyRequired();
         }
 
-        $total = (int) ($result['total'] ?? 0);
-        $what  = $q !== '' ? "“{$q}”" : 'that';
-        $extra = $notes ? ' (' . implode(', ', $notes) . ')' : '';
+        $data = $this->validated($request);
 
-        if ($total === 0) {
-            return $this->reply(
-                "I could not find jobs for {$what}{$extra}. Try fewer words or a related title, "
-                . 'for example "developer" instead of "senior full-stack developer".'
-            );
+        if ($limited = $this->limited($apiKey)) {
+            return $limited;
         }
 
-        $top = array_map(fn ($j) => [
-            'id'           => $j['id'],
-            'title'        => $j['title'],
-            'company'      => $j['company'],
-            'location'     => $j['location'],
-            'url'          => $j['url'],
-            'source'       => $j['source'],
-            'source_label' => self::PLATFORMS[$j['source']] ?? $j['source'],
-            'posted_at'    => $j['posted_at'],
-        ], array_slice($result['data'] ?? [], 0, 5));
+        return response()->stream(function () use ($apiKey, $data) {
+            @set_time_limit(120);
+            while (ob_get_level() > 0) {
+                @ob_end_flush();
+            }
 
-        $query = array_filter([
-            'q'      => $q,
-            'source' => $source,
-            'posted' => $posted,
-            'remote' => $remote ? '1' : '',
-        ], fn ($v) => $v !== '');
+            $send = function (string $event, array $payload = []): void {
+                echo 'event: ' . $event . "\n";
+                echo 'data: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n";
+                flush();
+            };
 
-        $count = number_format($total);
-        $word  = $total === 1 ? 'job' : 'jobs';
-        $shown = count($top);
+            // Padding so proxies and PHP servers start flushing immediately.
+            echo ':' . str_repeat(' ', 2048) . "\n\n";
+            flush();
 
-        return response()->json([
-            'reply'      => "I found {$count} {$word} for {$what}{$extra}. Here " . ($shown === 1 ? 'is the top match:' : "are the top {$shown}:"),
-            'jobs'       => $top,
-            'total'      => $total,
-            'search_url' => $query ? '/?' . http_build_query($query) : '/',
+            try {
+                $send('done', $this->assistant($apiKey, $data, $send));
+            } catch (MistralException $e) {
+                $send('error', $this->errorBody($e));
+            } catch (\Throwable $e) {
+                report($e);
+                $send('error', $this->genericError());
+            }
+        }, 200, [
+            'Content-Type'      => 'text/event-stream; charset=utf-8',
+            'Cache-Control'     => 'no-cache, no-transform',
+            'X-Accel-Buffering' => 'no',
         ]);
     }
 
-    /** @return array{0:string,1:string,2:string,3:bool,4:array<int,string>} */
-    private function parse(string $lower): array
+    // ------------------------------------------------------------ helpers
+
+    private function assistant(string $apiKey, array $data, ?callable $emit = null): array
     {
-        $rest   = ' ' . $lower . ' ';
-        $source = '';
-        $posted = '';
-        $remote = false;
-        $notes  = [];
+        return JobAssistant::make()->handle(
+            $apiKey,
+            trim($data['message']),
+            $data['history'] ?? [],
+            $data['last_search'] ?? null,
+            $emit
+        );
+    }
 
-        foreach (self::PLATFORMS as $key => $label) {
-            $pattern = '/\b' . preg_quote($key, '/') . '\b/u';
-            if (preg_match($pattern, $rest)) {
-                $source  = $key;
-                $notes[] = 'on ' . $label;
-                $rest    = (string) preg_replace($pattern, ' ', $rest);
-                break;
-            }
+    private function apiKey(Request $request): ?string
+    {
+        $apiKey = trim((string) $request->header('X-Mistral-Key', ''));
+
+        if ($apiKey === '' || strlen($apiKey) > 300 || preg_match('/\s/', $apiKey)) {
+            return null;
         }
 
-        $remotePattern = '/\b(remote|remotely|work from home|wfh|home ?office)\b/u';
-        if (preg_match($remotePattern, $rest)) {
-            $remote  = true;
-            $notes[] = 'remote';
-            $rest    = (string) preg_replace($remotePattern, ' ', $rest);
+        return $apiKey;
+    }
+
+    private function keyRequired(): JsonResponse
+    {
+        return response()->json([
+            'code'  => 'key_required',
+            'reply' => 'Please connect your Mistral API key to chat.',
+        ], 401);
+    }
+
+    private function validated(Request $request): array
+    {
+        return $request->validate([
+            'message'        => ['required', 'string', 'max:500'],
+            'history'        => ['nullable', 'array', 'max:12'],
+            'history.*.role' => ['required', 'string', 'in:user,bot'],
+            'history.*.text' => ['required', 'string', 'max:1000'],
+            'last_search'    => ['nullable', 'array'],
+        ]);
+    }
+
+    /** Per API key (the Next.js server is the only direct caller, so per-IP would be shared). */
+    private function limited(string $apiKey): ?JsonResponse
+    {
+        $limiterKey = 'chat:' . hash('sha256', $apiKey);
+
+        if (RateLimiter::tooManyAttempts($limiterKey, (int) config('chat.rate_per_min', 20))) {
+            return response()->json([
+                'code'  => 'rate_limited',
+                'reply' => 'You are sending messages too quickly. Please wait a few seconds.',
+            ], 429);
         }
 
-        $windows = [
-            '24h' => ['/\b(today|last 24 hours|past 24 hours|24 hours|24h|last day|past day)\b/u', 'posted in the last 24 hours'],
-            '7d'  => ['/\b(this week|past week|last week|last 7 days|past 7 days|7 days)\b/u', 'posted in the last 7 days'],
-            '30d' => ['/\b(this month|past month|last month|last 30 days|past 30 days|30 days)\b/u', 'posted in the last 30 days'],
+        RateLimiter::hit($limiterKey, 60);
+
+        return null;
+    }
+
+    private function errorStatus(MistralException $e): int
+    {
+        return match ($e->reason) {
+            'invalid_key'  => 401,
+            'rate_limited' => 429,
+            default        => 502,
+        };
+    }
+
+    private function errorBody(MistralException $e): array
+    {
+        return match ($e->reason) {
+            'invalid_key' => [
+                'code'  => 'invalid_key',
+                'reply' => 'Mistral rejected this API key. Please check it and connect again.',
+            ],
+            'rate_limited' => [
+                'code'  => 'upstream_rate_limited',
+                'reply' => 'Mistral is rate limiting this key right now. Please try again in a minute.',
+            ],
+            default => [
+                'code'  => 'upstream',
+                'reply' => 'The AI service is not responding right now. Please try again in a moment.',
+            ],
+        };
+    }
+
+    private function genericError(): array
+    {
+        return [
+            'code'  => 'error',
+            'reply' => 'Something went wrong on our side. Please try again.',
         ];
-        foreach ($windows as $key => [$pattern, $note]) {
-            if (preg_match($pattern, $rest)) {
-                $posted  = $key;
-                $notes[] = $note;
-                $rest    = (string) preg_replace($pattern, ' ', $rest);
-                break;
-            }
-        }
-
-        $words = [];
-        $parts = preg_split('/\s+/u', trim($rest), -1, PREG_SPLIT_NO_EMPTY);
-        foreach ($parts ?: [] as $word) {
-            $word = trim($word, ',;:!?"()[]');
-            if ($word === '' || in_array($word, self::STOPWORDS, true)) {
-                continue;
-            }
-            $words[] = $word;
-        }
-
-        return [implode(' ', array_slice($words, 0, 8)), $source, $posted, $remote, $notes];
-    }
-
-    private function reply(string $text): JsonResponse
-    {
-        return response()->json([
-            'reply'      => $text,
-            'jobs'       => [],
-            'total'      => 0,
-            'search_url' => null,
-        ]);
     }
 }
