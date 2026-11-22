@@ -388,3 +388,19 @@ a.cb-job:hover { border-color: rgba(94, 234, 212, .6); transform: translateY(-1p
 .cb-why { display: block; margin-top: 4px; font-size: .78rem; line-height: 1.4; color: var(--muted); }
 .cb-stage { padding: 2px 4px; animation: cb-pulse 1.4s ease-in-out infinite; }
 @keyframes cb-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+/* chat ai v3 */
+.cb-lang { font-weight: 700; white-space: nowrap; }
+.cb-job-title, .cb-job-meta, .cb-why { unicode-bidi: plaintext; }
+.cb-connect .cb-note { margin-top: 0; }
+
+/* Arabic / right-to-left */
+.cb-panel[dir="rtl"] { direction: rtl; text-align: right; font-family: "Noto Sans Arabic", "Segoe UI", Tahoma, Arial, system-ui, sans-serif; }
+.cb-panel[dir="rtl"] .cb-head { flex-direction: row; }
+.cb-panel[dir="rtl"] .cb-title { text-align: right; }
+.cb-panel[dir="rtl"] .cb-row { justify-content: flex-start; margin-left: 0; margin-right: 0; }
+.cb-panel[dir="rtl"] .cb-row.user { justify-content: flex-end; }
+.cb-panel[dir="rtl"] .cb-bubble { text-align: start; }
+.cb-panel[dir="rtl"] .cb-job, .cb-panel[dir="rtl"] .cb-connect { text-align: start; }
+.cb-panel[dir="rtl"] .cb-send-icon { transform: scaleX(-1); }
+.cb-panel[dir="rtl"] .cb-form input { text-align: start; }

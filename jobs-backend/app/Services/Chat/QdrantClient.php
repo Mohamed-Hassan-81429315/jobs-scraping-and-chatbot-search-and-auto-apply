@@ -7,6 +7,14 @@ use Illuminate\Support\Facades\Http;
 
 class QdrantClient
 {
+    /** Payload fields used in filters. Indexed so filtered search stays fast on big collections. */
+    private const INDEXES = [
+        'source'          => 'keyword',
+        'remote'          => 'bool',
+        'posted_ts'       => 'integer',
+        'location_tokens' => 'keyword',
+    ];
+
     public function __construct(
         private string $url,
         private string $collection,
@@ -35,57 +43,65 @@ class QdrantClient
         return '/collections/' . rawurlencode($this->collection) . $suffix;
     }
 
-    /** @return array{points:int,dim:?int}|null  null when the collection does not exist */
-    public function info(): ?array
-    {
-        $res = $this->http()->get($this->path());
-        if (!$res->successful()) {
-            return null;
-        }
-
-        $vectors = $res->json('result.config.params.vectors');
-        $dim     = is_array($vectors) && isset($vectors['size']) ? (int) $vectors['size'] : null;
-
-        return ['points' => (int) ($res->json('result.points_count') ?? 0), 'dim' => $dim];
-    }
-
-    /** Creates the collection, and refuses to reuse one built for a different vector size. */
     public function ensureCollection(int $dim, bool $fresh = false): void
     {
-        if ($fresh && $this->info() !== null) {
+        $info   = $this->http()->get($this->path());
+        $exists = $info->successful();
+
+        if ($exists && $fresh) {
             $this->http()->delete($this->path())->throw();
+            $exists = false;
         }
 
-        $info = $this->info();
+        if ($exists) {
+            $size = $info->json('result.config.params.vectors.size');
+            if (is_int($size) && $size !== $dim) {
+                throw new \RuntimeException(
+                    "Qdrant collection '{$this->collection}' holds vectors of size {$size}, but OPENAI_EMBED_DIM is {$dim}. "
+                    . 'Use another QDRANT_COLLECTION or run: php artisan jobs:embed --fresh'
+                );
+            }
+        }
 
-        if ($info === null) {
+        if (!$exists) {
             $this->http()->put($this->path(), [
                 'vectors' => ['size' => $dim, 'distance' => 'Cosine'],
             ])->throw();
-
-            return;
         }
 
-        if ($info['dim'] !== null && $info['dim'] !== $dim) {
-            throw new \RuntimeException(
-                "Qdrant collection '{$this->collection}' stores {$info['dim']}-dimension vectors but the embedding "
-                . "model produces {$dim}. Use a different QDRANT_COLLECTION or run: php artisan jobs:embed --fresh"
-            );
+        $this->ensurePayloadIndexes();
+    }
+
+    /** Idempotent. Failures are ignored: filters still work without an index, only slower. */
+    private function ensurePayloadIndexes(): void
+    {
+        foreach (self::INDEXES as $field => $schema) {
+            try {
+                $this->http()->put($this->path('/index?wait=true'), [
+                    'field_name'   => $field,
+                    'field_schema' => $schema,
+                ]);
+            } catch (\Throwable $e) {
+                report($e);
+            }
         }
     }
 
-    /** @param array<int,int> $ids  @return array<int,?string> job id => stored content hash */
-    public function existingHashes(array $ids): array
+    /** @param array<int,int> $ids  @return array<int,array{hash:?string,pv:int}> */
+    public function existingMeta(array $ids): array
     {
         $rows = $this->http()->post($this->path('/points'), [
             'ids'          => array_values($ids),
-            'with_payload' => ['hash'],
+            'with_payload' => ['hash', 'pv'],
             'with_vector'  => false,
         ])->throw()->json('result') ?? [];
 
         $out = [];
         foreach ($rows as $row) {
-            $out[(int) $row['id']] = $row['payload']['hash'] ?? null;
+            $out[(int) $row['id']] = [
+                'hash' => $row['payload']['hash'] ?? null,
+                'pv'   => (int) ($row['payload']['pv'] ?? 0),
+            ];
         }
 
         return $out;
@@ -94,6 +110,19 @@ class QdrantClient
     public function upsert(array $points): void
     {
         $this->http()->timeout(120)->put($this->path('/points?wait=true'), ['points' => $points])->throw();
+    }
+
+    /** Update the payload of existing points without touching their vectors. @param array<int,array> $byId */
+    public function setPayloads(array $byId): void
+    {
+        $ops = [];
+        foreach ($byId as $id => $payload) {
+            $ops[] = ['set_payload' => ['payload' => $payload, 'points' => [(int) $id]]];
+        }
+
+        foreach (array_chunk($ops, 100) as $chunk) {
+            $this->http()->timeout(60)->post($this->path('/points/batch?wait=true'), ['operations' => $chunk])->throw();
+        }
     }
 
     /**
@@ -117,7 +146,7 @@ class QdrantClient
         $res = $this->http()->post($this->path('/points/query'), $body);
 
         if ($res->status() === 404) {
-            if ($this->info() === null) {
+            if (!$this->http()->get($this->path())->successful()) {
                 throw new \RuntimeException('Qdrant collection not found. Run: php artisan jobs:embed');
             }
 
@@ -132,7 +161,8 @@ class QdrantClient
             if ($filter) {
                 $legacy['filter'] = $filter;
             }
-            $points = $this->http()->post($this->path('/points/search'), $legacy)->throw()->json('result') ?? [];
+            $res    = $this->http()->post($this->path('/points/search'), $legacy)->throw();
+            $points = $res->json('result') ?? [];
         } else {
             $points = $res->throw()->json('result.points') ?? [];
         }

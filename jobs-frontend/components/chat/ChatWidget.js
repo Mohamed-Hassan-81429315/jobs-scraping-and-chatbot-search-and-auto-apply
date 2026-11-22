@@ -2,19 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { KEY_PROBLEMS, STRINGS, errorText, initialLang } from './i18n';
 
-const STORAGE_KEY = 'hirelume:chat:v3';
-const SUGGESTIONS = [
-  'Remote Python jobs',
-  'Odoo developer jobs',
-  'Senior data analyst in Berlin',
-  'Jobs posted this week',
-];
-const WELCOME = {
-  role: 'bot',
-  text: 'Hi! Tell me what kind of job you want, in your own words and any language, and I will find the best matches.',
-  jobs: [],
-};
+const STORAGE_KEY = 'hirelume:chat:v5';
+const LANG_KEY = 'hirelume:chat:lang';
+const WELCOME = { role: 'bot', welcome: true, jobs: [] };
 
 function safeUrl(url) {
   try {
@@ -22,6 +14,37 @@ function safeUrl(url) {
     return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
   } catch {
     return null;
+  }
+}
+
+/** Reads a server-sent-events response and calls onEvent(name, data) for each event. */
+async function readEvents(res, onEvent) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let index;
+    while ((index = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+
+      let event = 'message';
+      let data = '';
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+
+      try {
+        onEvent(event, JSON.parse(data));
+      } catch {}
+    }
   }
 }
 
@@ -43,24 +66,46 @@ function CloseIcon() {
 }
 
 export default function ChatWidget() {
+  const [lang, setLang] = useState('en');
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState('checking'); // checking | needs_key | ready
   const [messages, setMessages] = useState([WELCOME]);
   const [lastSearch, setLastSearch] = useState(null);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
-  const [keyError, setKeyError] = useState('');
+  const [keyError, setKeyError] = useState(''); // an error code, translated when rendered
   const endRef = useRef(null);
   const inputRef = useRef(null);
+
+  const t = STRINGS[lang] || STRINGS.en;
+  const rtl = lang === 'ar';
+
+  // Language: saved choice, else the browser language.
+  useEffect(() => {
+    setLang(initialLang());
+  }, []);
+
+  function toggleLang() {
+    const next = lang === 'ar' ? 'en' : 'ar';
+    setLang(next);
+    try {
+      localStorage.setItem(LANG_KEY, next);
+    } catch {}
+  }
 
   // Restore the conversation for this browser tab (the API key is never stored here).
   useEffect(() => {
     try {
       const saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null');
       if (saved && Array.isArray(saved.messages) && saved.messages.length) {
-        setMessages(saved.messages.slice(-30));
+        const restored = saved.messages
+          .filter((m) => !(m.pending && !m.text && !m.jobs?.length))
+          .map((m) => ({ ...m, pending: false }))
+          .slice(-30);
+        if (restored.length) setMessages(restored);
         setLastSearch(saved.lastSearch || null);
       }
     } catch {}
@@ -92,8 +137,8 @@ export default function ChatWidget() {
   useEffect(() => {
     if (!open) return;
     endRef.current?.scrollIntoView({ block: 'end' });
-    if (status === 'ready') inputRef.current?.focus();
-  }, [open, status, messages, busy]);
+    if (status === 'ready' && !busy) inputRef.current?.focus();
+  }, [open, status, messages, busy, stage]);
 
   async function connect(e) {
     e.preventDefault();
@@ -108,13 +153,13 @@ export default function ChatWidget() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setKeyError(data.error || 'Could not connect. Please try again.');
+        setKeyError(data.code || 'error');
         return;
       }
       setKeyInput('');
       setStatus('ready');
     } catch {
-      setKeyError('Could not reach the server. Please try again.');
+      setKeyError('unreachable');
     } finally {
       setKeyBusy(false);
     }
@@ -128,58 +173,97 @@ export default function ChatWidget() {
     setKeyError('');
   }
 
+  /** Replace the last message (the bot placeholder) using fn(previous). */
+  function patchLast(fn) {
+    setMessages((m) => (m.length ? [...m.slice(0, -1), fn(m[m.length - 1])] : m));
+  }
+
+  function botError(code) {
+    return { role: 'bot', error: code, jobs: [] };
+  }
+
   async function send(raw) {
     const text = raw.trim();
     if (!text || busy) return;
 
-    const history = messages.slice(-8).map((m) => ({ role: m.role, text: m.text }));
-    setMessages((m) => [...m, { role: 'user', text }]);
+    // Only real text goes back to the server as context (not the welcome text or error bubbles).
+    const history = messages
+      .filter((m) => !m.pending && m.text)
+      .slice(-8)
+      .map((m) => ({ role: m.role, text: m.text }));
+
+    setMessages((m) => [...m, { role: 'user', text }, { role: 'bot', text: '', jobs: [], pending: true }]);
     setInput('');
+    setStage('planning');
     setBusy(true);
 
+    let finished = false;
+    let keyProblem = null;
+
     try {
-      const res = await fetch('/chat-api/message', {
+      const res = await fetch('/chat-api/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, last_search: lastSearch }),
+        body: JSON.stringify({ message: text, history, last_search: lastSearch, lang }),
       });
-      const data = await res.json().catch(() => null);
 
-      if (res.status === 401 && (data?.code === 'key_required' || data?.code === 'invalid_key')) {
-        setMessages((m) => m.slice(0, -1));
-        setInput(text);
-        setKeyError(data.reply || 'Please connect your OpenAI API key.');
-        setStatus('needs_key');
-        return;
+      const isStream = (res.headers.get('content-type') || '').includes('text/event-stream');
+
+      if (!res.ok || !res.body || !isStream) {
+        const data = await res.json().catch(() => null);
+        const code = data?.code || 'error';
+        finished = true;
+
+        if (KEY_PROBLEMS.includes(code)) {
+          keyProblem = code;
+        } else {
+          patchLast(() => botError(code));
+        }
+      } else {
+        await readEvents(res, (event, data) => {
+          if (event === 'status') {
+            setStage(data.stage || '');
+          } else if (event === 'jobs') {
+            patchLast((m) => ({ ...m, jobs: data.jobs || [], total: data.total || 0 }));
+          } else if (event === 'token') {
+            patchLast((m) => ({ ...m, text: (m.text || '') + (data.t || '') }));
+          } else if (event === 'done') {
+            finished = true;
+            setLastSearch(data.last_search || null);
+            patchLast(() => ({
+              role: 'bot',
+              text: data.reply || '',
+              jobs: data.jobs || [],
+              total: data.total || 0,
+              searchUrl: data.search_url,
+              followUps: data.follow_ups || [],
+              mode: data.mode,
+              reranked: Boolean(data.reranked),
+            }));
+          } else if (event === 'error') {
+            finished = true;
+            const code = data.code || 'error';
+            if (KEY_PROBLEMS.includes(code)) {
+              keyProblem = code;
+            } else {
+              patchLast(() => botError(code));
+            }
+          }
+        });
       }
-
-      if (!res.ok || !data?.reply) {
-        setMessages((m) => [
-          ...m,
-          { role: 'bot', text: data?.reply || 'Sorry, something went wrong. Please try again.', jobs: [] },
-        ]);
-        return;
-      }
-
-      setLastSearch(data.last_search || null);
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'bot',
-          text: data.reply,
-          jobs: data.jobs || [],
-          total: data.total || 0,
-          searchUrl: data.search_url,
-          followUps: data.follow_ups || [],
-          mode: data.mode,
-        },
-      ]);
     } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'bot', text: 'Sorry, I could not reach the search service. Please try again in a moment.', jobs: [] },
-      ]);
+      // network error or the stream was cut: handled below
     } finally {
+      if (keyProblem) {
+        // The key cannot be used (wrong, no credit, no access): back to the connect form, message kept.
+        setMessages((m) => m.slice(0, -2));
+        setInput(text);
+        setKeyError(keyProblem);
+        setStatus('needs_key');
+      } else if (!finished) {
+        patchLast((m) => (m.text || m.jobs?.length ? { ...m, pending: false } : botError('network')));
+      }
+      setStage('');
       setBusy(false);
     }
   }
@@ -202,7 +286,9 @@ export default function ChatWidget() {
           id="chat-panel"
           className="cb-panel"
           role="dialog"
-          aria-label="Job search assistant"
+          dir={rtl ? 'rtl' : 'ltr'}
+          lang={lang}
+          aria-label={t.title}
           onKeyDown={(e) => {
             if (e.key === 'Escape') setOpen(false);
           }}
@@ -210,51 +296,52 @@ export default function ChatWidget() {
           <header className="cb-head">
             <span className="cb-avatar" aria-hidden="true"><ChatIcon /></span>
             <div className="cb-title">
-              <strong>Job assistant</strong>
-              <span>Powered by OpenAI</span>
+              <strong>{t.title}</strong>
+              <span>{t.powered}</span>
             </div>
+            <button type="button" className="cb-icon cb-lang" onClick={toggleLang} aria-label={t.switchLabel} lang={rtl ? 'en' : 'ar'}>
+              {t.switchTo}
+            </button>
             {status === 'ready' && (
               <>
-                <button type="button" className="cb-icon" onClick={reset} title="Start a new chat">New</button>
-                <button type="button" className="cb-icon" onClick={disconnect} title="Remove your API key from this browser">
-                  Disconnect
+                <button type="button" className="cb-icon" onClick={reset} title={t.newChatTitle}>{t.newChat}</button>
+                <button type="button" className="cb-icon" onClick={disconnect} title={t.disconnectTitle}>
+                  {t.disconnect}
                 </button>
               </>
             )}
-            <button type="button" className="cb-icon" onClick={() => setOpen(false)} aria-label="Close chat">
+            <button type="button" className="cb-icon" onClick={() => setOpen(false)} aria-label={t.close}>
               <CloseIcon />
             </button>
           </header>
 
           {status === 'checking' && (
-            <div className="cb-body"><p className="cb-note">Loading...</p></div>
+            <div className="cb-body"><p className="cb-note">{t.loading}</p></div>
           )}
 
           {status === 'needs_key' && (
             <div className="cb-body">
               <form className="cb-connect" onSubmit={connect}>
-                <h3>Connect your OpenAI API key</h3>
-                <p>
-                  The assistant uses OpenAI to understand your request. Paste your own API key to continue; usage is
-                  billed to your OpenAI account. The key is encrypted in a secure cookie, never saved in our database,
-                  and you can disconnect at any time.
-                </p>
-                {keyError && <p className="cb-error" role="alert">{keyError}</p>}
-                <label htmlFor="openai-key" className="sr">OpenAI API key</label>
+                <h3>{t.connectTitle}</h3>
+                <p>{t.connectBody}</p>
+                <p className="cb-note">{t.connectHint}</p>
+                {keyError && <p className="cb-error" role="alert">{errorText(lang, keyError)}</p>}
+                <label htmlFor="openai-key" className="sr">{t.keyLabel}</label>
                 <input
                   id="openai-key"
                   type="password"
+                  dir="ltr"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="sk-..."
+                  placeholder={t.keyPlaceholder}
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
                 />
                 <button type="submit" disabled={keyBusy || keyInput.trim().length < 20}>
-                  {keyBusy ? 'Checking your key...' : 'Connect and continue'}
+                  {keyBusy ? t.connecting : t.connectButton}
                 </button>
                 <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
-                  Get an API key from OpenAI →
+                  {t.getKey}
                 </a>
               </form>
             </div>
@@ -263,76 +350,89 @@ export default function ChatWidget() {
           {status === 'ready' && (
             <>
               <div className="cb-body" role="log" aria-live="polite" aria-relevant="additions">
-                {messages.map((m, i) => (
-                  <div key={i} className={m.role === 'user' ? 'cb-row user' : 'cb-row'}>
-                    <div className={m.role === 'user' ? 'cb-bubble user' : 'cb-bubble'}>
-                      {m.text.split('\n').map((line, k) => (
-                        <p key={k}>{line}</p>
-                      ))}
+                {messages.map((m, i) => {
+                  const waiting = m.pending && !m.text && !m.jobs?.length;
+                  const body = m.welcome ? t.welcome : m.error ? errorText(lang, m.error) : m.text || '';
 
-                      {m.jobs?.length > 0 && (
-                        <ul className="cb-jobs">
-                          {m.jobs.map((j) => {
-                            const href = safeUrl(j.url);
-                            const inner = (
-                              <>
-                                <span className="cb-job-title">{j.title}</span>
-                                <span className="cb-job-meta">
-                                  {j.company}
-                                  {j.location ? ` · ${j.location}` : ''}
-                                </span>
-                                <span className="cb-job-foot">
-                                  <span className="cb-job-tag">{j.source_label}</span>
-                                  {j.match != null && <span className="cb-match">{j.match}% match</span>}
-                                </span>
-                              </>
-                            );
-                            return (
-                              <li key={j.id}>
-                                {href ? (
-                                  <a className="cb-job" href={href} target="_blank" rel="nofollow noopener noreferrer">{inner}</a>
-                                ) : (
-                                  <span className="cb-job">{inner}</span>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
+                  return (
+                    <div key={i} className={m.role === 'user' ? 'cb-row user' : 'cb-row'}>
+                      <div
+                        className={
+                          m.role === 'user' ? 'cb-bubble user' : waiting ? 'cb-bubble cb-typing' : 'cb-bubble'
+                        }
+                        aria-label={waiting ? t.typing : undefined}
+                      >
+                        {waiting ? (
+                          <>
+                            <span /><span /><span />
+                          </>
+                        ) : (
+                          <>
+                            {body.split('\n').map((line, k) => (
+                              <p key={k} dir="auto">{line}</p>
+                            ))}
 
-                      {m.mode === 'keyword' && m.jobs?.length > 0 && (
-                        <p className="cb-note">AI index unavailable, so I used keyword search.</p>
-                      )}
+                            {m.jobs?.length > 0 && (
+                              <ul className="cb-jobs">
+                                {m.jobs.map((j) => {
+                                  const href = safeUrl(j.url);
+                                  const inner = (
+                                    <>
+                                      <span className="cb-job-title" dir="auto">{j.title}</span>
+                                      <span className="cb-job-meta" dir="auto">
+                                        {j.company}
+                                        {j.location ? ` · ${j.location}` : ''}
+                                      </span>
+                                      {j.why && <span className="cb-why" dir="auto">{j.why}</span>}
+                                      <span className="cb-job-foot">
+                                        <span className="cb-job-tag">{j.source_label}</span>
+                                        {j.match != null && <span className="cb-match">{t.match(j.match)}</span>}
+                                      </span>
+                                    </>
+                                  );
+                                  return (
+                                    <li key={j.id}>
+                                      {href ? (
+                                        <a className="cb-job" href={href} target="_blank" rel="nofollow noopener noreferrer">{inner}</a>
+                                      ) : (
+                                        <span className="cb-job">{inner}</span>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
 
-                      {m.searchUrl && m.jobs?.length > 0 && (
-                        <Link className="cb-more" href={m.searchUrl} prefetch={false} onClick={() => setOpen(false)}>
-                          Open full search →
-                        </Link>
-                      )}
+                            {m.mode === 'keyword' && m.jobs?.length > 0 && (
+                              <p className="cb-note">{t.keywordNote}</p>
+                            )}
+
+                            {m.searchUrl && m.jobs?.length > 0 && !m.pending && (
+                              <Link className="cb-more" href={m.searchUrl} prefetch={false} onClick={() => setOpen(false)}>
+                                {t.openSearch}
+                              </Link>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                {busy && (
-                  <div className="cb-row">
-                    <div className="cb-bubble cb-typing" aria-label="The assistant is typing">
-                      <span /><span /><span />
-                    </div>
-                  </div>
-                )}
+                {busy && stage && t.stages[stage] && <p className="cb-note cb-stage">{t.stages[stage]}</p>}
 
                 {!busy && onlyWelcome && (
-                  <ul className="cb-suggest" aria-label="Suggestions">
-                    {SUGGESTIONS.map((s) => (
+                  <ul className="cb-suggest" aria-label={t.suggestionsLabel}>
+                    {t.suggestions.map((s) => (
                       <li key={s}><button type="button" onClick={() => send(s)}>{s}</button></li>
                     ))}
                   </ul>
                 )}
 
                 {!busy && messages[lastIndex]?.followUps?.length > 0 && (
-                  <ul className="cb-suggest" aria-label="Follow-up suggestions">
+                  <ul className="cb-suggest" aria-label={t.followUpsLabel}>
                     {messages[lastIndex].followUps.map((s) => (
-                      <li key={s}><button type="button" onClick={() => send(s)}>{s}</button></li>
+                      <li key={s}><button type="button" onClick={() => send(s)} dir="auto">{s}</button></li>
                     ))}
                   </ul>
                 )}
@@ -349,16 +449,17 @@ export default function ChatWidget() {
                 <input
                   ref={inputRef}
                   type="text"
+                  dir="auto"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Describe the job you want..."
-                  aria-label="Your message"
+                  placeholder={t.inputPlaceholder}
+                  aria-label={t.inputLabel}
                   maxLength={500}
                   autoComplete="off"
                   enterKeyHint="send"
                 />
-                <button type="submit" disabled={busy || !input.trim()} aria-label="Send message">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <button type="submit" disabled={busy || !input.trim()} aria-label={t.send}>
+                  <svg className="cb-send-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M5 12h14M13 6l6 6-6 6" />
                   </svg>
                 </button>
@@ -372,7 +473,7 @@ export default function ChatWidget() {
         type="button"
         className="cb-launch"
         onClick={() => setOpen(!open)}
-        aria-label={open ? 'Close job assistant' : 'Open job assistant'}
+        aria-label={open ? t.closeLabel : t.openLabel}
         aria-expanded={open}
         aria-controls="chat-panel"
       >

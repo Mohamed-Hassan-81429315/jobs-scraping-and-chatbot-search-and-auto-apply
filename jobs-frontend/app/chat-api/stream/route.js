@@ -41,6 +41,7 @@ export async function POST(request) {
         .filter((h) => h.text)
     : [];
   const lastSearch = body?.last_search && typeof body.last_search === 'object' ? body.last_search : null;
+  const lang = body?.lang === 'ar' ? 'ar' : 'en';
 
   const timeout = AbortSignal.timeout(120000);
   const signal = typeof AbortSignal.any === 'function' ? AbortSignal.any([request.signal, timeout]) : timeout;
@@ -54,7 +55,7 @@ export async function POST(request) {
         Accept: 'text/event-stream',
         'X-OpenAI-Key': key,
       },
-      body: JSON.stringify({ message, history, last_search: lastSearch }),
+      body: JSON.stringify({ message, history, last_search: lastSearch, lang }),
       cache: 'no-store',
       signal,
     });

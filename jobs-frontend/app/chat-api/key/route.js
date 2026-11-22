@@ -8,9 +8,14 @@ export const dynamic = 'force-dynamic';
 const WEEK = 60 * 60 * 24 * 7;
 const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
 
+// Every failure carries a "code". The widget turns it into text in the visitor's language.
+function problem(code, status) {
+  return NextResponse.json({ code }, { status });
+}
+
 export async function POST(request) {
   if (!sameOrigin(request)) {
-    return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
+    return NextResponse.json({ code: 'forbidden_origin', error: 'Forbidden.' }, { status: 403 });
   }
 
   let body = null;
@@ -19,61 +24,43 @@ export async function POST(request) {
   } catch {}
 
   const key = String(body?.key ?? '').trim();
-  if (!/^sk-[\w-]{16,}$/.test(key) || key.length > 250) {
-    return NextResponse.json(
-      { error: 'That does not look like an OpenAI API key. It should start with "sk-".' },
-      { status: 400 }
-    );
+  if (!key.startsWith('sk-') || key.length < 20 || key.length > 300 || /\s/.test(key)) {
+    return problem('format', 400);
   }
 
-  // Verify the key with a tiny embeddings request: it checks the key AND the exact permission we use.
+  // A real (almost free) embeddings call. Listing models would succeed even for a key with no credit,
+  // and the first chat message would then fail. This catches that at connect time.
   let check;
   try {
     check = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: EMBED_MODEL, input: 'ok' }),
+      body: JSON.stringify({ model: EMBED_MODEL, input: 'ping' }),
       cache: 'no-store',
       signal: AbortSignal.timeout(20000),
     });
   } catch {
-    return NextResponse.json({ error: 'Could not reach OpenAI to verify the key. Please try again.' }, { status: 502 });
+    return problem('unreachable', 502);
   }
 
-  if (check.status === 401) {
-    return NextResponse.json({ error: 'OpenAI rejected this key. Check it and try again.' }, { status: 400 });
-  }
+  if (check.status === 401) return problem('invalid', 400);
+  if (check.status === 403) return problem('forbidden', 400);
+  if (check.status === 404) return problem('model', 400);
 
-  if (!check.ok) {
+  if (check.status === 429) {
     const info = await check.json().catch(() => null);
-    const code = info?.error?.code;
-    if (check.status === 429 && code === 'insufficient_quota') {
-      return NextResponse.json(
-        { error: 'This OpenAI account has no remaining credit. Add billing credit in your OpenAI account, then try again.' },
-        { status: 400 }
-      );
-    }
-    if (check.status === 429) {
-      return NextResponse.json({ error: 'OpenAI is rate limiting this key. Try again in a moment.' }, { status: 429 });
-    }
-    if (check.status === 403 || check.status === 404) {
-      const detail = String(info?.error?.message ?? '').slice(0, 160);
-      return NextResponse.json(
-        { error: `This key cannot use the required model.${detail ? ` OpenAI says: ${detail}` : ''}` },
-        { status: 400 }
-      );
-    }
-    return NextResponse.json({ error: 'OpenAI could not verify the key right now. Try again in a moment.' }, { status: 502 });
+    const code = info?.error?.code || info?.error?.type || '';
+    if (code === 'insufficient_quota') return problem('quota', 400);
+    // Any other 429 only means "busy right now": the key itself is valid, so accept it.
+  } else if (!check.ok) {
+    return problem('upstream', 502);
   }
 
   let sealed;
   try {
     sealed = seal(key);
   } catch {
-    return NextResponse.json(
-      { error: 'The server is missing CHAT_COOKIE_SECRET. Add it to jobs-frontend/.env.local and restart.' },
-      { status: 500 }
-    );
+    return problem('server_secret', 500);
   }
 
   const jar = await cookies();
@@ -90,7 +77,7 @@ export async function POST(request) {
 
 export async function DELETE(request) {
   if (!sameOrigin(request)) {
-    return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
+    return NextResponse.json({ code: 'forbidden_origin', error: 'Forbidden.' }, { status: 403 });
   }
   const jar = await cookies();
   jar.delete({ name: COOKIE_NAME, path: '/chat-api' });

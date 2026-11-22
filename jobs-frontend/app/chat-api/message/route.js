@@ -40,6 +40,7 @@ export async function POST(request) {
         .filter((h) => h.text)
     : [];
   const lastSearch = body?.last_search && typeof body.last_search === 'object' ? body.last_search : null;
+  const lang = body?.lang === 'ar' ? 'ar' : 'en';
 
   try {
     const res = await fetch(`${API}/chat`, {
@@ -49,7 +50,7 @@ export async function POST(request) {
         Accept: 'application/json',
         'X-OpenAI-Key': key,
       },
-      body: JSON.stringify({ message, history, last_search: lastSearch }),
+      body: JSON.stringify({ message, history, last_search: lastSearch, lang }),
       cache: 'no-store',
       signal: AbortSignal.timeout(90000),
     });
