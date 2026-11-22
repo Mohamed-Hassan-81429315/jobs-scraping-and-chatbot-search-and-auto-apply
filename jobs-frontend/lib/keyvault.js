@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const COOKIE_NAME = 'hirelume_mistral';
+export const COOKIE_NAME = 'hirelume_openai';
 
 function secretKey() {
   const secret = process.env.CHAT_COOKIE_SECRET;

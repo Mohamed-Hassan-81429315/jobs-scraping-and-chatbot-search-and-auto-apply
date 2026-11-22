@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const WEEK = 60 * 60 * 24 * 7;
+const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
 
 export async function POST(request) {
   if (!sameOrigin(request)) {
@@ -18,27 +19,51 @@ export async function POST(request) {
   } catch {}
 
   const key = String(body?.key ?? '').trim();
-  if (key.length < 16 || key.length > 200 || /\s/.test(key)) {
-    return NextResponse.json({ error: 'That does not look like a valid API key.' }, { status: 400 });
+  if (!/^sk-[\w-]{16,}$/.test(key) || key.length > 250) {
+    return NextResponse.json(
+      { error: 'That does not look like an OpenAI API key. It should start with "sk-".' },
+      { status: 400 }
+    );
   }
 
-  // Verify the key with Mistral before storing it.
+  // Verify the key with a tiny embeddings request: it checks the key AND the exact permission we use.
   let check;
   try {
-    check = await fetch('https://api.mistral.ai/v1/models', {
-      headers: { Authorization: `Bearer ${key}` },
+    check = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: 'ok' }),
       cache: 'no-store',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(20000),
     });
   } catch {
-    return NextResponse.json({ error: 'Could not reach Mistral to verify the key. Please try again.' }, { status: 502 });
+    return NextResponse.json({ error: 'Could not reach OpenAI to verify the key. Please try again.' }, { status: 502 });
   }
 
-  if (check.status === 401 || check.status === 403) {
-    return NextResponse.json({ error: 'Mistral rejected this key. Check it and try again.' }, { status: 400 });
+  if (check.status === 401) {
+    return NextResponse.json({ error: 'OpenAI rejected this key. Check it and try again.' }, { status: 400 });
   }
+
   if (!check.ok) {
-    return NextResponse.json({ error: 'Mistral could not verify the key right now. Try again in a moment.' }, { status: 502 });
+    const info = await check.json().catch(() => null);
+    const code = info?.error?.code;
+    if (check.status === 429 && code === 'insufficient_quota') {
+      return NextResponse.json(
+        { error: 'This OpenAI account has no remaining credit. Add billing credit in your OpenAI account, then try again.' },
+        { status: 400 }
+      );
+    }
+    if (check.status === 429) {
+      return NextResponse.json({ error: 'OpenAI is rate limiting this key. Try again in a moment.' }, { status: 429 });
+    }
+    if (check.status === 403 || check.status === 404) {
+      const detail = String(info?.error?.message ?? '').slice(0, 160);
+      return NextResponse.json(
+        { error: `This key cannot use the required model.${detail ? ` OpenAI says: ${detail}` : ''}` },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json({ error: 'OpenAI could not verify the key right now. Try again in a moment.' }, { status: 502 });
   }
 
   let sealed;

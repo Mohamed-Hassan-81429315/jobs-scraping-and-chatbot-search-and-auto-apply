@@ -18,7 +18,7 @@ export async function POST(request) {
 
   if (!key) {
     return NextResponse.json(
-      { code: 'key_required', reply: 'Please connect your Mistral API key to chat.' },
+      { code: 'key_required', reply: 'Please connect your OpenAI API key to chat.' },
       { status: 401 }
     );
   }
@@ -47,7 +47,7 @@ export async function POST(request) {
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        'X-Mistral-Key': key,
+        'X-OpenAI-Key': key,
       },
       body: JSON.stringify({ message, history, last_search: lastSearch }),
       cache: 'no-store',
