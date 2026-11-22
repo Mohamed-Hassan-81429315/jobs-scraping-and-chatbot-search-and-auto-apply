@@ -36,3 +36,14 @@ __pycache__/
 venv/
 .env
 jobs.json.bak
+common_platforms.env
+.env
+jobs.json
+jobs.json.bak
+logs/
+.pipeline.lock
+*.prepatch
+*.orig
+venv/
+node_modules/
+.next/
