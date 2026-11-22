@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 class JobText
 {
     /** Bump when the Qdrant payload layout changes; jobs:embed then refreshes payloads without re-embedding. */
-    public const VERSION = 2;
+    public const VERSION = 3;
 
     private const LOCATION_STOP = [
         'remote', 'anywhere', 'worldwide', 'hybrid', 'onsite', 'site', 'and', 'the', 'area', 'region',
@@ -34,7 +34,9 @@ class JobText
     /** Lowercased ASCII words of a place name ("Zürich, Switzerland" => zurich, switzerland). */
     public static function locationTokens(?string $location): array
     {
-        $ascii = mb_strtolower(Str::ascii((string) $location));
+        $location = (string) $location;
+        $text     = $location . ' ' . Places::arabicToEnglish($location); // Arabic job locations become English tokens
+        $ascii    = mb_strtolower(Str::ascii((string) preg_replace('/\p{Arabic}+/u', ' ', $text)));
         $words = preg_split('/[^a-z0-9]+/', $ascii, -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
         $tokens = [];
