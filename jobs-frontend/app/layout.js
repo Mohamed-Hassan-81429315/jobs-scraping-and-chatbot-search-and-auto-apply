@@ -4,6 +4,7 @@ import { Inter, Space_Grotesk } from 'next/font/google';
 import { BRAND } from '../lib/brand';
 import { LogoMark } from '../components/Logo';
 import UserMenu from '../components/UserMenu';
+import ChatWidget from '../components/chat/ChatWidget';
 
 const body = Inter({ subsets: ['latin'], variable: '--font-body', display: 'swap' });
 const display = Space_Grotesk({ subsets: ['latin'], variable: '--font-display', display: 'swap' });
@@ -66,6 +67,8 @@ export default function RootLayout({ children }) {
         </header>
 
         {children}
+
+        <ChatWidget />
 
         <footer className="site-footer">
           <div className="wrap">
