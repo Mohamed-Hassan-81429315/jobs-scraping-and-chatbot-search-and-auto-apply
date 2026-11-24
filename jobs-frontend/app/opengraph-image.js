@@ -1,5 +1,5 @@
 import { ImageResponse } from 'next/og';
-import { BRAND } from '../lib/brand';
+import { BRAND } from '../lib/applyra-brand';
 
 export const alt = `${BRAND.name}: ${BRAND.tagline}`;
 export const size = { width: 1200, height: 630 };
@@ -25,17 +25,17 @@ export default function Image() {
             style={{
               width: 128,
               height: 128,
-              borderRadius: 34,
+              borderRadius: 32,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              background: 'linear-gradient(135deg, #5eead4, #818cf8)',
+              background: '#12263F',
             }}
           >
-            <svg width="76" height="76" viewBox="8 8 24 24" fill="none" stroke="#06101f" strokeWidth="3.4" strokeLinecap="round">
-              <path d="M12 11v18M28 11v18" />
-              <circle cx="20" cy="20" r="4.6" />
-              <path d="M13.5 20h1.9M24.6 20h1.9" />
+            <svg width="128" height="128" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#12263F" />
+              <path d="M11.5 29.5 20 10.5l8.5 19" stroke="#ffffff" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="20" cy="25" r="3.1" fill="#2EE6A6" />
             </svg>
           </div>
           <div style={{ fontSize: 116, fontWeight: 800, letterSpacing: -4, marginLeft: 32 }}>{BRAND.name}</div>
