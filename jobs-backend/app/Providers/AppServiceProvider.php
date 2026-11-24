@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,6 +20,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Password-reset emails link to the Next.js page, not to a Laravel route.
+        ResetPassword::createUrlUsing(fn ($user, string $token) =>
+            rtrim(config('app.frontend_url'), '/')
+            . '/reset-password?token=' . $token
+            . '&email=' . urlencode($user->getEmailForPasswordReset())
+        );
     }
 }

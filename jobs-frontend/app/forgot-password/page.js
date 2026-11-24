@@ -1,20 +1,26 @@
 import Link from 'next/link';
-import { Suspense } from 'react';
-import AuthShell from '@/components/AuthShell';
-import AuthForm from '@/components/AuthForm';
+import { redirect } from 'next/navigation';
+import { getUser } from '../../lib/auth';
+import AuthShell from '../../components/auth/AuthShell';
+import ForgotOtpForm from '../../components/auth/ForgotOtpForm';
 
 export const metadata = {
   title: 'Reset your password',
-  description: 'Request a link to reset your Applyra password.',
+  description: 'Get a 6-digit code by email to reset your password.',
+  robots: { index: false, follow: false },
   alternates: { canonical: '/forgot-password' },
-  robots: { index: false, follow: true },
 };
 
-export default function ForgotPasswordPage() {
+export default async function ForgotPasswordPage() {
+  if (await getUser()) redirect('/');
+
   return (
-    <AuthShell title="Reset your password" intro="Enter your email and we will send you a link to choose a new password."
-      footer={<><Link href="/login">Back to sign in</Link></>}>
-      <Suspense><AuthForm mode="forgot" /></Suspense>
+    <AuthShell
+      title="Reset your password"
+      lead="Enter your email and we will send you a 6-digit code."
+      footer={<Link href="/" prefetch={false}>Back to sign in</Link>}
+    >
+      <ForgotOtpForm />
     </AuthShell>
   );
 }

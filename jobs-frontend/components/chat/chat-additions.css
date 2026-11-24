@@ -15,3 +15,6 @@
 .ac__history .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 8px 12px; font-size: 1.15rem; }
 .ac__history .x:hover { opacity: 1; color: #ef4444; }
 .ac__history .empty { opacity: .7; font-size: .88rem; padding: 8px 4px; }
+
+/* --- login screen: forgot-password link under the form --- */
+.auth-forgot { text-align: center; margin-top: 14px; font-size: .9rem; }

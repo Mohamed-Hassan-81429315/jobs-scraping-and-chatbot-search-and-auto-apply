@@ -4,6 +4,9 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\JobController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\PasswordResetController;
+
+
 
 Route::get('/stats', [JobController::class, 'stats']);
 Route::get('/jobs', [JobController::class, 'index']);
@@ -21,6 +24,12 @@ Route::prefix('auth')->group(function () {
         Route::put('/password', [AuthController::class, 'updatePassword']);
     });
 });
+
+Route::prefix('auth')->middleware('throttle:5,1')->group(function () {
+    Route::post('/forgot-password', [PasswordResetController::class, 'forgot']);
+    Route::post('/reset-password', [PasswordResetController::class, 'reset']);
+});
+
 Route::post('/forgot-password', [\App\Http\Controllers\AuthController::class, 'forgotPassword'])->middleware('throttle:10,1');
 Route::post('/reset-password', [\App\Http\Controllers\AuthController::class, 'resetPassword'])->middleware('throttle:10,1');
 Route::post('/update-password', [\App\Http\Controllers\AuthController::class, 'updatePassword'])->middleware('auth:sanctum');

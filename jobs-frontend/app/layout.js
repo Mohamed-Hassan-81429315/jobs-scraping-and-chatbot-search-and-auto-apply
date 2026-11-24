@@ -63,10 +63,12 @@ export default async function RootLayout({ children }) {
               <span className="brand-mark"><LogoMark /></span>
               <span>{BRAND.parts[0]}<b>{BRAND.parts[1]}</b></span>
             </Link>
-            <nav className="nav" aria-label="Main">
-              <Link href="/?remote=1" prefetch={false}>Remote jobs</Link>
-              <Link href="/?posted=24h" prefetch={false}>New today</Link>
-            </nav>
+            {user && (
+              <nav className="nav" aria-label="Main">
+                <Link href="/?remote=1" prefetch={false}>Remote jobs</Link>
+                <Link href="/?posted=24h" prefetch={false}>New today</Link>
+              </nav>
+            )}
             <UserMenu />
             <ChatBootstrap />
           </div>
