@@ -4,7 +4,8 @@ import { Suspense } from 'react';
 import { Inter, Space_Grotesk } from 'next/font/google';
 import { BRAND } from '../lib/brand';
 import { getUser } from '../lib/auth';
-import { LogoMark } from '../components/Logo';
+import Image from 'next/image';
+import { BRAND as APPLYRA } from '../lib/applyra-brand';
 import UserMenu from '../components/UserMenu';
 import ChatBootstrap from '../components/chat/ChatBootstrap';
 import ChatWidget from '../components/chat/ChatWidget';
@@ -41,7 +42,7 @@ const organization = {
   '@type': 'Organization',
   name: BRAND.name,
   url: SITE_URL,
-  logo: `${SITE_URL}/icon.svg`,
+  logo: `${SITE_URL}/applyra-logo.png`,
   description: BRAND.description,
 };
 
@@ -59,9 +60,9 @@ export default async function RootLayout({ children }) {
 
         <header className="site-header">
           <div className="wrap">
-            <Link href="/" className="brand" aria-label={`${BRAND.name} home`}>
-              <span className="brand-mark"><LogoMark /></span>
-              <span>{BRAND.parts[0]}<b>{BRAND.parts[1]}</b></span>
+            <Link href="/" className="brand" aria-label={`${APPLYRA.name} home`}>
+              <Image src="/applyra-logo.png" alt="" width={32} height={32} priority style={{ width: 32, height: 'auto' }} />
+              <span>{APPLYRA.name}</span>
             </Link>
             {user && (
               <nav className="nav" aria-label="Main">
