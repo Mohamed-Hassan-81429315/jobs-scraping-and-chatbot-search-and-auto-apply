@@ -36,6 +36,8 @@ class PasswordOtpMailTest extends TestCase
                 && $mail->name === 'Sara Ali'
                 && $mail->minutes === 10
                 && preg_match('/^\d{6}$/', $mail->code) === 1
+                && str_contains($html, 'Applyra logo')
+                && preg_match('/src="cid:[^"]+"/', $html) === 1
                 && str_contains($html, 'Please verify your identity, Sara Ali')
                 && str_contains($html, 'Here is your Applyra password reset verification code:')
                 && str_contains($html, 'This code is valid for')

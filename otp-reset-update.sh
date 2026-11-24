@@ -27,6 +27,7 @@ Existing files that get replaced are backed up as <name>.prepatch.
 Your mail settings (including the password) go in jobs-backend/.env only. This script never touches .env.
 """
 
+import base64
 import pathlib
 import shutil
 import sys
@@ -122,7 +123,9 @@ FILES[BACK / "resources/views/emails/password-otp.blade.php"] = r'''<!doctype ht
             <td align="center" style="padding:0 0 24px;">
               <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                  <td align="center" valign="middle" width="40" height="40" style="width:40px;height:40px;border-radius:50%;background:#0b6bcb;color:#ffffff;font-size:22px;font-weight:700;">A</td>
+                  <td align="center" valign="middle" width="40" height="40" style="width:40px;height:40px;">
+                    <img src="{{ $message->embed(public_path('images/applyra-logo.png')) }}" width="40" height="40" alt="Applyra logo" style="display:block;width:40px;height:40px;border:0;border-radius:10px;">
+                  </td>
                   <td style="padding-left:10px;color:#1f2328;font-size:21px;font-weight:700;letter-spacing:-0.4px;">Applyra</td>
                 </tr>
               </table>
@@ -352,6 +355,8 @@ class PasswordOtpMailTest extends TestCase
                 && $mail->name === 'Sara Ali'
                 && $mail->minutes === 10
                 && preg_match('/^\d{6}$/', $mail->code) === 1
+                && str_contains($html, 'Applyra logo')
+                && preg_match('/src="cid:[^"]+"/', $html) === 1
                 && str_contains($html, 'Please verify your identity, Sara Ali')
                 && str_contains($html, 'Here is your Applyra password reset verification code:')
                 && str_contains($html, 'This code is valid for')
@@ -921,6 +926,12 @@ FILES[FRONT / "components/auth/OtpSentDialog.module.css"] = r'''.dialog {
 }
 '''
 
+ASSETS = {
+    BACK / "public/images/applyra-logo.png": base64.b64decode(
+        "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"
+    ),
+}
+
 # =====================================================================
 # write
 # =====================================================================
@@ -936,6 +947,12 @@ for path, content in FILES.items():
     backup(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+    print(f"wrote    {path}")
+
+for path, content in ASSETS.items():
+    backup(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
     print(f"wrote    {path}")
 
 # --- make sure the two API routes exist -------------------------------

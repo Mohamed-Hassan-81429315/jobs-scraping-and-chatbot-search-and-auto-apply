@@ -422,3 +422,30 @@ a.cb-job:hover { border-color: rgba(94, 234, 212, .6); transform: translateY(-1p
 .chat-history li:hover button, .chat-history li button:focus-visible { opacity: 1; }
 .chat-history li button:hover { color: #fca5a5; }
 .chat-empty { font-size: .85rem; color: var(--muted); padding: 0 4px; }
+
+
+
+/* --- centered modal (append to app/globals.css) --- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;          /* the actual centering */
+  padding: 16px;
+  background: rgba(5, 8, 20, .72);
+  backdrop-filter: blur(6px);
+  overflow-y: auto;
+}
+.modal-center {
+  width: min(440px, 100%);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+}
+/* If the card was positioned on its own (fixed / left / transform), cancel that so the wrapper centers it. */
+.modal-center > * {
+  position: relative !important;
+  inset: auto !important;
+  transform: none !important;
+  margin: 0 auto !important;
+}

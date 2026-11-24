@@ -18,7 +18,9 @@
             <td align="center" style="padding:0 0 24px;">
               <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                  <td align="center" valign="middle" width="40" height="40" style="width:40px;height:40px;border-radius:50%;background:#0b6bcb;color:#ffffff;font-size:22px;font-weight:700;">A</td>
+                  <td align="center" valign="middle" width="40" height="40" style="width:40px;height:40px;">
+                    <img src="{{ $message->embed(public_path('images/applyra-logo.png')) }}" width="40" height="40" alt="Applyra logo" style="display:block;width:40px;height:40px;border:0;border-radius:10px;">
+                  </td>
                   <td style="padding-left:10px;color:#1f2328;font-size:21px;font-weight:700;letter-spacing:-0.4px;">Applyra</td>
                 </tr>
               </table>
