@@ -1,0 +1,159 @@
+.dialog {
+  width: min(100% - 28px, 470px);
+  max-width: 470px;
+  max-height: min(90dvh, 760px);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, .3);
+  border-radius: 24px;
+  color: #eef1fb;
+  background: #10172d;
+  box-shadow: 0 32px 100px rgba(0, 0, 0, .55), 0 0 0 1px rgba(129, 140, 248, .08);
+  overscroll-behavior: contain;
+}
+
+.dialog[open] {
+  animation: otp-dialog-in 320ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.dialog::backdrop {
+  background: rgba(3, 7, 18, .72);
+  backdrop-filter: blur(7px);
+  animation: otp-backdrop-in 220ms ease-out both;
+}
+
+.card {
+  position: relative;
+  padding: 34px 30px 28px;
+}
+
+.close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 50%;
+  color: #c5cce0;
+  background: rgba(255, 255, 255, .05);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.close:hover { color: #fff; background: rgba(255, 255, 255, .12); transform: rotate(5deg); }
+.close svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+
+.mailIcon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  margin-bottom: 18px;
+  border: 1px solid rgba(94, 234, 212, .26);
+  border-radius: 18px;
+  color: #07121d;
+  background: linear-gradient(135deg, #5eead4, #818cf8);
+  box-shadow: 0 12px 34px rgba(94, 234, 212, .18);
+  animation: otp-icon-pulse 2.6s ease-in-out 400ms infinite;
+}
+
+.mailIcon svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+.eyebrow { margin-bottom: 5px; color: #78e5d4; font-size: .76rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.title { margin: 0 36px 16px 0; color: #f4f6ff; font-size: clamp(1.45rem, 5vw, 1.85rem); line-height: 1.2; letter-spacing: -.025em; }
+
+.notice {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(11, 107, 203, .1);
+  border-radius: 15px;
+  color: #263342;
+  background: #eef5fa;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .75);
+}
+
+.noticeLabel { margin-bottom: 5px; color: #536373; font-size: .8rem; font-weight: 600; }
+.email { overflow-wrap: anywhere; color: #10293d; font-size: 1rem; font-weight: 700; }
+.description { margin: 0 0 18px; color: #b4bdd5; font-size: .9rem; line-height: 1.65; }
+
+.resend {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 20px;
+}
+.resendDialog { margin-top: 2px; }
+.resend form { margin: 0; }
+.resendButton {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 18px;
+  border: 1px solid rgba(129, 140, 248, .45);
+  border-radius: 999px;
+  color: #e2e7ff;
+  background: rgba(129, 140, 248, .12);
+  font-size: .9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+.resendButton:not(:disabled):hover { transform: translateY(-1px); border-color: rgba(129, 140, 248, .8); background: rgba(129, 140, 248, .22); }
+.resendButton:disabled { cursor: not-allowed; opacity: .62; }
+.cooldown, .resendSuccess { color: #aeb8d2; font-size: .8rem; line-height: 1.5; }
+.cooldown strong { color: #eef1fb; font-variant-numeric: tabular-nums; }
+.error { color: #fda4af; font-size: .82rem; line-height: 1.5; }
+.resendSuccess { color: #7ee7d6; }
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(226, 231, 255, .35);
+  border-top-color: #e2e7ff;
+  border-radius: 50%;
+  animation: otp-spin 700ms linear infinite;
+}
+
+.confirm {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 14px;
+  color: #07121d;
+  background: linear-gradient(110deg, #5eead4, #818cf8);
+  box-shadow: 0 12px 28px rgba(94, 234, 212, .16);
+  font-size: .96rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+.confirm span { font-size: 1.2rem; line-height: 1; transition: transform 160ms ease; }
+.confirm:hover { transform: translateY(-1px); box-shadow: 0 16px 34px rgba(94, 234, 212, .25); filter: saturate(1.08); }
+.confirm:hover span { transform: translateX(3px); }
+.confirm:active { transform: translateY(0); }
+
+@keyframes otp-dialog-in {
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes otp-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes otp-icon-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+@keyframes otp-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 520px) {
+  .card { padding: 30px 20px 22px; }
+  .dialog { border-radius: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open], .dialog::backdrop, .mailIcon, .spinner { animation: none; }
+  .close, .resendButton, .confirm, .confirm span { transition: none; }
+}

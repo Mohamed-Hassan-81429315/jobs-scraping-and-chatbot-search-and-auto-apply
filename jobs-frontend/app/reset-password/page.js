@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getUser } from '../../lib/auth';
-import { resendOtpAction } from '../auth/otp-actions';
 import AuthShell from '../../components/auth/AuthShell';
 import ResetOtpForm from '../../components/auth/ResetOtpForm';
+import ResendCodeControl from '../../components/auth/ResendCodeControl';
 
 export const metadata = {
   title: 'Enter your code',
@@ -16,10 +16,14 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default async function ResetPasswordPage({ searchParams }) {
   if (await getUser()) redirect('/');
-
   const sp = await searchParams;
   const email = String(sp?.email ?? '').trim().toLowerCase();
   if (!EMAIL.test(email)) redirect('/forgot-password');
+
+  const requestedAt = Number(sp?.sentAt ?? 0);
+  const sentAt = Number.isSafeInteger(requestedAt) && requestedAt > 0 && requestedAt < 4_102_444_800_000
+    ? requestedAt
+    : 0;
 
   return (
     <AuthShell
@@ -28,10 +32,7 @@ export default async function ResetPasswordPage({ searchParams }) {
       footer={<Link href="/" prefetch={false}>Back to sign in</Link>}
     >
       <ResetOtpForm email={email} />
-      <form action={resendOtpAction} className="auth-forgot">
-        <input type="hidden" name="email" value={email} />
-        <button type="submit" className="btn-link">Resend code</button>
-      </form>
+      <ResendCodeControl email={email} initialSentAt={sentAt} />
     </AuthShell>
   );
 }

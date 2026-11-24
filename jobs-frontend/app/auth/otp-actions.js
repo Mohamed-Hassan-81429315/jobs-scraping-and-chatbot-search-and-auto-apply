@@ -4,8 +4,7 @@ import { redirect } from 'next/navigation';
 import { api } from '../../lib/auth';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const clean = (v) => String(v ?? '').trim();
-
+const clean = (value) => String(value ?? '').trim();
 const state = (extra = {}) => ({ errors: {}, error: '', success: '', values: {}, ...extra });
 
 function firstErrors(data) {
@@ -25,29 +24,31 @@ function failure(res, values) {
   return state({ error: 'Something went wrong. Please try again.', values });
 }
 
-/** Forgot-password form: email the code, then go enter it. */
+/** Request a code without navigating; the client shows its confirmation dialog. */
 export async function requestOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
   const values = { email };
-
   if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
 
   const res = await api('/auth/forgot-password', { method: 'POST', body: { email } });
   if (!res.ok) return failure(res, values);
 
-  redirect(`/reset-password?email=${encodeURIComponent(email)}&sent=1`);
+  return state({ email, sentAt: Date.now(), success: 'code-requested', values });
 }
 
-/** "Resend code" button on the reset page. The server enforces one send per minute. */
-export async function resendOtpAction(formData) {
+/** Resend a code; the backend remains authoritative for its one-minute cooldown. */
+export async function resendOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
-  if (!EMAIL.test(email)) redirect('/forgot-password');
+  const values = { email };
+  if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
 
-  await api('/auth/forgot-password', { method: 'POST', body: { email } });
-  redirect(`/reset-password?email=${encodeURIComponent(email)}&sent=1`);
+  const res = await api('/auth/forgot-password', { method: 'POST', body: { email } });
+  if (!res.ok) return failure(res, values);
+
+  return state({ email, sentAt: Date.now(), success: 'resend-requested', values });
 }
 
-/** Reset form: code + new password. On success the user logs in again with the new password. */
+/** Reset form: code + new password. On success the user signs in again with the new password. */
 export async function resetWithOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
   const code = clean(formData.get('code')).replace(/\D/g, '').slice(0, 6);
@@ -55,6 +56,7 @@ export async function resetWithOtpAction(_prev, formData) {
   const password_confirmation = String(formData.get('password_confirmation') ?? '');
   const values = { code };
 
+  if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
   if (code.length !== 6) return state({ errors: { code: 'Enter the 6-digit code from the email.' }, values });
 
   const res = await api('/auth/reset-password', {
@@ -62,6 +64,5 @@ export async function resetWithOtpAction(_prev, formData) {
     body: { email, code, password, password_confirmation },
   });
   if (!res.ok) return failure(res, values);
-
   redirect('/?reset=1');
 }

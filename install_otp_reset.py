@@ -303,6 +303,53 @@ class PasswordResetController extends Controller
 }
 '''
 
+FILES[BACK / "tests/Feature/PasswordOtpMailTest.php"] = r'''<?php
+
+namespace Tests\Feature;
+
+use App\Mail\PasswordOtpMail;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Tests\TestCase;
+
+class PasswordOtpMailTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_forgot_password_sends_a_branded_single_use_code_email(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create([
+            'name' => 'Sara Ali',
+            'email' => 'sara@example.com',
+        ]);
+
+        $this->postJson('/api/auth/forgot-password', ['email' => $user->email])
+            ->assertOk()
+            ->assertJsonPath('message', 'If that email has an account, a 6-digit code is on its way.');
+
+        Mail::assertSent(PasswordOtpMail::class, function (PasswordOtpMail $mail) use ($user): bool {
+            $html = $mail->render();
+            $text = view('emails.password-otp-text', [
+                'code' => $mail->code,
+                'minutes' => $mail->minutes,
+                'name' => $mail->name,
+            ])->render();
+
+            return $mail->hasTo($user->email)
+                && $mail->name === 'Sara Ali'
+                && $mail->minutes === 10
+                && preg_match('/^\d{6}$/', $mail->code) === 1
+                && str_contains($html, 'Please verify your identity, Sara Ali')
+                && str_contains($html, 'Here is your Applyra password reset verification code:')
+                && str_contains($html, 'This code is valid for')
+                && str_contains($text, $mail->code);
+        });
+    }
+}
+'''
+
 # =====================================================================
 # FRONTEND
 # =====================================================================
@@ -313,8 +360,7 @@ import { redirect } from 'next/navigation';
 import { api } from '../../lib/auth';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const clean = (v) => String(v ?? '').trim();
-
+const clean = (value) => String(value ?? '').trim();
 const state = (extra = {}) => ({ errors: {}, error: '', success: '', values: {}, ...extra });
 
 function firstErrors(data) {
@@ -334,29 +380,31 @@ function failure(res, values) {
   return state({ error: 'Something went wrong. Please try again.', values });
 }
 
-/** Forgot-password form: email the code, then go enter it. */
+/** Request a code without navigating; the client shows its confirmation dialog. */
 export async function requestOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
   const values = { email };
-
   if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
 
   const res = await api('/auth/forgot-password', { method: 'POST', body: { email } });
   if (!res.ok) return failure(res, values);
 
-  redirect(`/reset-password?email=${encodeURIComponent(email)}&sent=1`);
+  return state({ email, sentAt: Date.now(), success: 'code-requested', values });
 }
 
-/** "Resend code" button on the reset page. The server enforces one send per minute. */
-export async function resendOtpAction(formData) {
+/** Resend a code; the backend remains authoritative for its one-minute cooldown. */
+export async function resendOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
-  if (!EMAIL.test(email)) redirect('/forgot-password');
+  const values = { email };
+  if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
 
-  await api('/auth/forgot-password', { method: 'POST', body: { email } });
-  redirect(`/reset-password?email=${encodeURIComponent(email)}&sent=1`);
+  const res = await api('/auth/forgot-password', { method: 'POST', body: { email } });
+  if (!res.ok) return failure(res, values);
+
+  return state({ email, sentAt: Date.now(), success: 'resend-requested', values });
 }
 
-/** Reset form: code + new password. On success the user logs in again with the new password. */
+/** Reset form: code + new password. On success the user signs in again with the new password. */
 export async function resetWithOtpAction(_prev, formData) {
   const email = clean(formData.get('email')).toLowerCase();
   const code = clean(formData.get('code')).replace(/\D/g, '').slice(0, 6);
@@ -364,6 +412,7 @@ export async function resetWithOtpAction(_prev, formData) {
   const password_confirmation = String(formData.get('password_confirmation') ?? '');
   const values = { code };
 
+  if (!EMAIL.test(email)) return state({ errors: { email: 'Enter a valid email address.' }, values });
   if (code.length !== 6) return state({ errors: { code: 'Enter the 6-digit code from the email.' }, values });
 
   const res = await api('/auth/reset-password', {
@@ -371,7 +420,6 @@ export async function resetWithOtpAction(_prev, formData) {
     body: { email, code, password, password_confirmation },
   });
   if (!res.ok) return failure(res, values);
-
   redirect('/?reset=1');
 }
 '''
@@ -382,6 +430,7 @@ import { useActionState } from 'react';
 import { requestOtpAction } from '../../app/auth/otp-actions';
 import Field from './Field';
 import SubmitButton from './SubmitButton';
+import OtpSentDialog from './OtpSentDialog';
 
 const INITIAL = { errors: {}, error: '', success: '', values: {} };
 
@@ -389,22 +438,24 @@ export default function ForgotOtpForm() {
   const [state, action] = useActionState(requestOtpAction, INITIAL);
 
   return (
-    <form action={action} className="auth-form">
-      {state.error && <p className="alert" role="alert">{state.error}</p>}
-
-      <Field
-        id="email"
-        name="email"
-        type="email"
-        label="Email"
-        autoComplete="email"
-        defaultValue={state.values.email}
-        error={state.errors.email}
-        maxLength={255}
-        autoFocus
-      />
-      <SubmitButton pendingLabel="Sending code...">Send code</SubmitButton>
-    </form>
+    <>
+      <form action={action} className="auth-form">
+        {state.error && <p className="alert" role="alert">{state.error}</p>}
+        <Field
+          id="email"
+          name="email"
+          type="email"
+          label="Email"
+          autoComplete="email"
+          defaultValue={state.values.email}
+          error={state.errors.email}
+          maxLength={255}
+          autoFocus
+        />
+        <SubmitButton pendingLabel="Sending code...">Send code</SubmitButton>
+      </form>
+      {state.email && state.sentAt ? <OtpSentDialog email={state.email} sentAt={state.sentAt} /> : null}
+    </>
   );
 }
 '''
@@ -494,9 +545,9 @@ export default async function ForgotPasswordPage() {
 FILES[FRONT / "app/reset-password/page.js"] = r'''import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getUser } from '../../lib/auth';
-import { resendOtpAction } from '../auth/otp-actions';
 import AuthShell from '../../components/auth/AuthShell';
 import ResetOtpForm from '../../components/auth/ResetOtpForm';
+import ResendCodeControl from '../../components/auth/ResendCodeControl';
 
 export const metadata = {
   title: 'Enter your code',
@@ -509,10 +560,14 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default async function ResetPasswordPage({ searchParams }) {
   if (await getUser()) redirect('/');
-
   const sp = await searchParams;
   const email = String(sp?.email ?? '').trim().toLowerCase();
   if (!EMAIL.test(email)) redirect('/forgot-password');
+
+  const requestedAt = Number(sp?.sentAt ?? 0);
+  const sentAt = Number.isSafeInteger(requestedAt) && requestedAt > 0 && requestedAt < 4_102_444_800_000
+    ? requestedAt
+    : 0;
 
   return (
     <AuthShell
@@ -521,12 +576,337 @@ export default async function ResetPasswordPage({ searchParams }) {
       footer={<Link href="/" prefetch={false}>Back to sign in</Link>}
     >
       <ResetOtpForm email={email} />
-      <form action={resendOtpAction} className="auth-forgot">
-        <input type="hidden" name="email" value={email} />
-        <button type="submit" className="btn-link">Resend code</button>
-      </form>
+      <ResendCodeControl email={email} initialSentAt={sentAt} />
     </AuthShell>
   );
+}
+'''
+
+FILES[FRONT / "components/auth/OtpSentDialog.js"] = r'''"use client";
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import ResendCodeControl from './ResendCodeControl';
+import styles from './OtpSentDialog.module.css';
+
+export default function OtpSentDialog({ email, sentAt }) {
+  const router = useRouter();
+  const dialogRef = useRef(null);
+  const latestSentAtRef = useRef(sentAt);
+  const [dismissedSentAt, setDismissedSentAt] = useState(0);
+  const isOpen = Boolean(email && sentAt && dismissedSentAt !== sentAt);
+
+  useEffect(() => {
+    latestSentAtRef.current = sentAt;
+  }, [sentAt]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen && !dialog.open) dialog.showModal();
+    if (!isOpen && dialog.open) dialog.close();
+  }, [isOpen]);
+
+  const handleResent = useCallback((timestamp) => {
+    latestSentAtRef.current = timestamp;
+  }, []);
+
+  function continueToCodeEntry() {
+    setDismissedSentAt(sentAt);
+    const params = new URLSearchParams({ email, sentAt: String(latestSentAtRef.current || sentAt) });
+    router.push(`/reset-password?${params.toString()}`);
+  }
+
+  if (!email || !sentAt) return null;
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className={styles.dialog}
+      aria-labelledby="otp-sent-title"
+      aria-describedby="otp-sent-description"
+      onClose={() => setDismissedSentAt(sentAt)}
+      onClick={(event) => {
+        if (event.target === dialogRef.current) setDismissedSentAt(sentAt);
+      }}
+    >
+      <section className={styles.card}>
+        <button
+          type="button"
+          className={styles.close}
+          aria-label="Close confirmation"
+          onClick={() => setDismissedSentAt(sentAt)}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+        </button>
+
+        <div className={styles.mailIcon} aria-hidden="true">
+          <svg viewBox="0 0 48 48"><rect x="6" y="10" width="36" height="28" rx="6" /><path d="m8 14 16 12 16-12" /></svg>
+        </div>
+
+        <p className={styles.eyebrow}>Code requested</p>
+        <h2 id="otp-sent-title" className={styles.title}>Check your email</h2>
+        <div className={styles.notice}>
+          <p className={styles.noticeLabel}>OTP code requested for</p>
+          <p className={styles.email}>{email}</p>
+        </div>
+        <p id="otp-sent-description" className={styles.description}>
+          If an Applyra account exists for this address, a verification code is on its way. Check your inbox and spam folder now. If you do not receive a code, use Resend Code below after the one-minute cooldown.
+        </p>
+
+        <ResendCodeControl
+          email={email}
+          initialSentAt={sentAt}
+          onResent={handleResent}
+          variant="dialog"
+        />
+
+        <button type="button" className={styles.confirm} onClick={continueToCodeEntry}>
+          OK, Received It
+          <span aria-hidden="true">→</span>
+        </button>
+      </section>
+    </dialog>
+  );
+}
+'''
+
+FILES[FRONT / "components/auth/ResendCodeControl.js"] = r'''"use client";
+
+import { useActionState, useEffect, useState } from 'react';
+import { resendOtpAction } from '../../app/auth/otp-actions';
+import styles from './OtpSentDialog.module.css';
+
+const INITIAL = { errors: {}, error: '', success: '', values: {} };
+const RESEND_WAIT_MS = 60_000;
+
+function formatCountdown(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+export default function ResendCodeControl({ email, initialSentAt = 0, onResent, variant = 'page' }) {
+  const [state, action, pending] = useActionState(resendOtpAction, INITIAL);
+  const [now, setNow] = useState(0);
+  const latestSentAt = Number(state.sentAt) || Number(initialSentAt) || 0;
+  const deadline = latestSentAt > 0 ? latestSentAt + RESEND_WAIT_MS : 0;
+  const remaining = deadline
+    ? Math.max(0, Math.ceil((deadline - (now || deadline - RESEND_WAIT_MS)) / 1000))
+    : 0;
+
+  useEffect(() => {
+    if (!state.sentAt) return;
+    onResent?.(Number(state.sentAt));
+  }, [state.sentAt, onResent]);
+
+  useEffect(() => {
+    if (!deadline) {
+      return undefined;
+    }
+
+    let timer;
+    const tick = () => {
+      const timestamp = Date.now();
+      setNow(timestamp);
+      if (timestamp < deadline) {
+        timer = window.setTimeout(tick, Math.min(1000, deadline - timestamp));
+      }
+    };
+    timer = window.setTimeout(tick, 0);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [deadline]);
+
+  const isDialog = variant === 'dialog';
+  const disabled = pending || remaining > 0;
+
+  return (
+    <div className={`${styles.resend} ${isDialog ? styles.resendDialog : ''}`}>
+      <form action={action}>
+        <input type="hidden" name="email" value={email} />
+        <button type="submit" className={styles.resendButton} disabled={disabled}>
+          {pending ? (
+            <><span className={styles.spinner} aria-hidden="true" /> Sending code…</>
+          ) : 'Resend Code'}
+        </button>
+      </form>
+      {remaining > 0 ? (
+        <p className={styles.cooldown} role="status" aria-live="polite">
+          You can request another code in <strong>{formatCountdown(remaining)}</strong>.
+        </p>
+      ) : null}
+      {state.error ? <p className={styles.error} role="alert">{state.error}</p> : null}
+      {state.success === 'resend-requested' ? (
+        <p className={styles.resendSuccess} role="status" aria-live="polite">
+          If an account exists for this email, a new code is on its way.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+'''
+
+FILES[FRONT / "components/auth/OtpSentDialog.module.css"] = r'''.dialog {
+  width: min(100% - 28px, 470px);
+  max-width: 470px;
+  max-height: min(90dvh, 760px);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, .3);
+  border-radius: 24px;
+  color: #eef1fb;
+  background: #10172d;
+  box-shadow: 0 32px 100px rgba(0, 0, 0, .55), 0 0 0 1px rgba(129, 140, 248, .08);
+  overscroll-behavior: contain;
+}
+
+.dialog[open] {
+  animation: otp-dialog-in 320ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.dialog::backdrop {
+  background: rgba(3, 7, 18, .72);
+  backdrop-filter: blur(7px);
+  animation: otp-backdrop-in 220ms ease-out both;
+}
+
+.card {
+  position: relative;
+  padding: 34px 30px 28px;
+}
+
+.close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 50%;
+  color: #c5cce0;
+  background: rgba(255, 255, 255, .05);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.close:hover { color: #fff; background: rgba(255, 255, 255, .12); transform: rotate(5deg); }
+.close svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+
+.mailIcon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  margin-bottom: 18px;
+  border: 1px solid rgba(94, 234, 212, .26);
+  border-radius: 18px;
+  color: #07121d;
+  background: linear-gradient(135deg, #5eead4, #818cf8);
+  box-shadow: 0 12px 34px rgba(94, 234, 212, .18);
+  animation: otp-icon-pulse 2.6s ease-in-out 400ms infinite;
+}
+
+.mailIcon svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+.eyebrow { margin-bottom: 5px; color: #78e5d4; font-size: .76rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.title { margin: 0 36px 16px 0; color: #f4f6ff; font-size: clamp(1.45rem, 5vw, 1.85rem); line-height: 1.2; letter-spacing: -.025em; }
+
+.notice {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(11, 107, 203, .1);
+  border-radius: 15px;
+  color: #263342;
+  background: #eef5fa;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .75);
+}
+
+.noticeLabel { margin-bottom: 5px; color: #536373; font-size: .8rem; font-weight: 600; }
+.email { overflow-wrap: anywhere; color: #10293d; font-size: 1rem; font-weight: 700; }
+.description { margin: 0 0 18px; color: #b4bdd5; font-size: .9rem; line-height: 1.65; }
+
+.resend {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 20px;
+}
+.resendDialog { margin-top: 2px; }
+.resend form { margin: 0; }
+.resendButton {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 18px;
+  border: 1px solid rgba(129, 140, 248, .45);
+  border-radius: 999px;
+  color: #e2e7ff;
+  background: rgba(129, 140, 248, .12);
+  font-size: .9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+.resendButton:not(:disabled):hover { transform: translateY(-1px); border-color: rgba(129, 140, 248, .8); background: rgba(129, 140, 248, .22); }
+.resendButton:disabled { cursor: not-allowed; opacity: .62; }
+.cooldown, .resendSuccess { color: #aeb8d2; font-size: .8rem; line-height: 1.5; }
+.cooldown strong { color: #eef1fb; font-variant-numeric: tabular-nums; }
+.error { color: #fda4af; font-size: .82rem; line-height: 1.5; }
+.resendSuccess { color: #7ee7d6; }
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(226, 231, 255, .35);
+  border-top-color: #e2e7ff;
+  border-radius: 50%;
+  animation: otp-spin 700ms linear infinite;
+}
+
+.confirm {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 14px;
+  color: #07121d;
+  background: linear-gradient(110deg, #5eead4, #818cf8);
+  box-shadow: 0 12px 28px rgba(94, 234, 212, .16);
+  font-size: .96rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+.confirm span { font-size: 1.2rem; line-height: 1; transition: transform 160ms ease; }
+.confirm:hover { transform: translateY(-1px); box-shadow: 0 16px 34px rgba(94, 234, 212, .25); filter: saturate(1.08); }
+.confirm:hover span { transform: translateX(3px); }
+.confirm:active { transform: translateY(0); }
+
+@keyframes otp-dialog-in {
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes otp-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes otp-icon-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+@keyframes otp-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 520px) {
+  .card { padding: 30px 20px 22px; }
+  .dialog { border-radius: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open], .dialog::backdrop, .mailIcon, .spinner { animation: none; }
+  .close, .resendButton, .confirm, .confirm span { transition: none; }
 }
 '''
 
@@ -574,10 +954,8 @@ else:
 
 print("""
 Done. Next:
-
 1) jobs-backend/.env  (use YOUR values; the password is a NEW Google app password, no spaces)
-
-   APP_NAME="HireLuMe"
+   APP_NAME="Applyra"
    MAIL_MAILER=smtp
    MAIL_HOST=smtp.gmail.com
    MAIL_PORT=587
@@ -585,7 +963,7 @@ Done. Next:
    MAIL_USERNAME=your.gmail.address@gmail.com
    MAIL_PASSWORD=your-new-16-character-app-password
    MAIL_FROM_ADDRESS=your.gmail.address@gmail.com
-   MAIL_FROM_NAME="HireLuMe"
+   MAIL_FROM_NAME="Applyra"
 
    (Laravel 10 or older: use MAIL_ENCRYPTION=tls instead of MAIL_SCHEME.)
 
