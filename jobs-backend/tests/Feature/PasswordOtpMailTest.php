@@ -41,7 +41,7 @@ class PasswordOtpMailTest extends TestCase
                 && str_contains($html, 'Please verify your identity, <strong>Sara Ali</strong>')
                 && str_contains($html, 'Here is your Applyra password reset verification code:')
                 && str_contains($html, 'This code is valid for')
-                && str_contains($html, 'Enter code on Applyra')
+                && str_contains($html, 'Copy OTP code')
                 && str_contains($html, '/reset-password?email=sara%40example.com')
                 && preg_match('~reset-password[^"]*' . $mail->code . '~', $html) !== 1 // the code is never in a link
                 && str_contains($text, $mail->code);

@@ -53,7 +53,7 @@
                     <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto 18px;">
                       <tr>
                         <td align="center" bgcolor="#4f46e5" style="border-radius:999px;background:#4f46e5;">
-                          <a href="{{ $resetUrl }}" target="_blank" rel="noopener" style="display:inline-block;padding:11px 24px;font-size:14px;font-weight:600;line-height:1.2;color:#ffffff;text-decoration:none;border-radius:999px;">Enter code on Applyra</a>
+                          <a href="{{ $resetUrl }}" target="_blank" rel="noopener" style="display:inline-block;padding:11px 24px;font-size:14px;font-weight:600;line-height:1.2;color:#ffffff;text-decoration:none;border-radius:999px;">Copy OTP code</a>
                         </td>
                       </tr>
                     </table>

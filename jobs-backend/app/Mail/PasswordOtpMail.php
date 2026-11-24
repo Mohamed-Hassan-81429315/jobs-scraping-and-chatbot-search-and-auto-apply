@@ -37,7 +37,8 @@ class PasswordOtpMail extends Mailable
 
     /**
      * Button target: the "enter your code" page with the email already filled in.
-     * The code itself is never put in a link (links end up in logs, scanners and previews).
+     * The code travels in the URL fragment (#code=...), never the query string: browsers do not send
+     * fragments to servers, proxies, access logs or Referer headers, and the page clears it on load.
      */
     private function resetUrl(): ?string
     {
@@ -45,8 +46,10 @@ class PasswordOtpMail extends Mailable
             return null;
         }
 
-        return rtrim((string) config('app.frontend_url'), '/')
+        $url = rtrim((string) config('app.frontend_url'), '/')
             . '/reset-password?'
             . http_build_query(['email' => $this->email]);
+
+        return preg_match('/^\d{6}$/', $this->code) ? $url . '#code=' . $this->code : $url;
     }
 }
