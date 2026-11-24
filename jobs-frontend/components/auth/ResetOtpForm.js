@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from 'react';
+import { useActionState, useEffect } from 'react';
 import { resetWithOtpAction } from '../../app/auth/otp-actions';
 import Field from './Field';
 import PasswordField from './PasswordField';
@@ -8,9 +8,19 @@ import SubmitButton from './SubmitButton';
 
 const INITIAL = { errors: {}, error: '', success: '', values: {} };
 
-export default function ResetOtpForm({ email }) {
+export default function ResetOtpForm({ email, initialCode = '' }) {
   const [state, action] = useActionState(resetWithOtpAction, INITIAL);
   const top = state.error || state.errors.email;
+
+  // The code came from the email link: take it out of the address bar (history, screenshots).
+  useEffect(() => {
+    if (!initialCode) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('code')) {
+      url.searchParams.delete('code');
+      window.history.replaceState(null, '', url.pathname + url.search);
+    }
+  }, [initialCode]);
 
   return (
     <form action={action} className="auth-form">
@@ -25,9 +35,9 @@ export default function ResetOtpForm({ email }) {
         inputMode="numeric"
         pattern="[0-9]{6}"
         maxLength={6}
-        defaultValue={state.values.code}
+        defaultValue={state.values.code ?? initialCode}
         error={state.errors.code}
-        autoFocus
+        autoFocus={!initialCode}
       />
       <PasswordField
         id="password"

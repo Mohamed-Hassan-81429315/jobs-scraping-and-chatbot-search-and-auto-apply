@@ -9,6 +9,7 @@ export const metadata = {
   title: 'Enter your code',
   description: 'Enter the 6-digit code from your email and choose a new password.',
   robots: { index: false, follow: false },
+  referrer: 'no-referrer', // the address may carry a one-time code: never leak it
   alternates: { canonical: '/reset-password' },
 };
 
@@ -19,6 +20,10 @@ export default async function ResetPasswordPage({ searchParams }) {
   const sp = await searchParams;
   const email = String(sp?.email ?? '').trim().toLowerCase();
   if (!EMAIL.test(email)) redirect('/forgot-password');
+
+  // The email button adds ?code=123456. Only exactly six digits are accepted.
+  const rawCode = String(sp?.code ?? '').trim();
+  const code = /^\d{6}$/.test(rawCode) ? rawCode : '';
 
   const requestedAt = Number(sp?.sentAt ?? 0);
   const sentAt = Number.isSafeInteger(requestedAt) && requestedAt > 0 && requestedAt < 4_102_444_800_000
@@ -31,7 +36,7 @@ export default async function ResetPasswordPage({ searchParams }) {
       lead={`If ${email} has an account, we sent it a 6-digit code. It expires in 10 minutes.`}
       footer={<Link href="/" prefetch={false}>Back to sign in</Link>}
     >
-      <ResetOtpForm email={email} />
+      <ResetOtpForm email={email} initialCode={code} />
       <ResendCodeControl email={email} initialSentAt={sentAt} />
     </AuthShell>
   );

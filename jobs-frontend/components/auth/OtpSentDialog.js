@@ -8,6 +8,7 @@ import styles from './OtpSentDialog.module.css';
 export default function OtpSentDialog({ email, sentAt }) {
   const router = useRouter();
   const dialogRef = useRef(null);
+  const confirmRef = useRef(null);
   const latestSentAtRef = useRef(sentAt);
   const [dismissedSentAt, setDismissedSentAt] = useState(0);
   const isOpen = Boolean(email && sentAt && dismissedSentAt !== sentAt);
@@ -18,10 +19,31 @@ export default function OtpSentDialog({ email, sentAt }) {
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog) return;
+    if (!dialog) return undefined;
 
-    if (isOpen && !dialog.open) dialog.showModal();
-    if (!isOpen && dialog.open) dialog.close();
+    if (!isOpen) {
+      if (dialog.open) dialog.close();
+      return undefined;
+    }
+
+    if (!dialog.open) {
+      dialog.showModal();
+      confirmRef.current?.focus(); // the primary action, not the close button
+    }
+
+    // A modal <dialog> makes the page inert but the page can still scroll behind the backdrop.
+    // Lock it, and keep the layout from jumping when the scrollbar disappears.
+    const root = document.documentElement;
+    const previousOverflow = root.style.overflow;
+    const previousPadding = root.style.paddingRight;
+    const scrollbar = window.innerWidth - root.clientWidth;
+    root.style.overflow = 'hidden';
+    if (scrollbar > 0) root.style.paddingRight = `${scrollbar}px`;
+
+    return () => {
+      root.style.overflow = previousOverflow;
+      root.style.paddingRight = previousPadding;
+    };
   }, [isOpen]);
 
   const handleResent = useCallback((timestamp) => {
@@ -78,7 +100,7 @@ export default function OtpSentDialog({ email, sentAt }) {
           variant="dialog"
         />
 
-        <button type="button" className={styles.confirm} onClick={continueToCodeEntry}>
+        <button ref={confirmRef} type="button" className={styles.confirm} onClick={continueToCodeEntry}>
           OK, Received It
           <span aria-hidden="true">→</span>
         </button>

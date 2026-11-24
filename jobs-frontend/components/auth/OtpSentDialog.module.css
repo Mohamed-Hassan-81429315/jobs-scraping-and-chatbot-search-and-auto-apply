@@ -1,7 +1,16 @@
 .dialog {
+  /*
+   * Center the modal explicitly. A browser centers a modal <dialog> with "margin: auto", and the
+   * global reset in globals.css (* { margin: 0 }) removes it, which pins the dialog to the
+   * top-left corner. position + inset + margin:auto centers it on both axes, at any viewport size.
+   */
+  position: fixed;
+  inset: 0;
+  margin: auto;
   width: min(100% - 28px, 470px);
+  height: fit-content;
   max-width: 470px;
-  max-height: min(90dvh, 760px);
+  max-height: min(100dvh - 28px, 760px);
   padding: 0;
   overflow: auto;
   border: 1px solid rgba(148, 163, 184, .3);
