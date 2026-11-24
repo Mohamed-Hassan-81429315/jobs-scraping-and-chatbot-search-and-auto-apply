@@ -1,484 +1,573 @@
-"use client";
+'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
-import { KEY_PROBLEMS, STRINGS, errorText, initialLang } from './i18n';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { greetingFor } from './greeting';
+import { newClientId } from './guestChat';
+import { useGuestSavePrompt } from './useGuestSavePrompt';
+import SaveChatPrompt from './SaveChatPrompt';
+import { deleteConversation, listConversations, loadConversation, saveTurn } from '../../app/chat/actions';
+import './chat.css';
 
-const STORAGE_KEY = 'hirelume:chat:v5';
-const LANG_KEY = 'hirelume:chat:lang';
-const WELCOME = { role: 'bot', welcome: true, jobs: [] };
+const SUGGESTIONS = ['Remote developer jobs', 'Marketing jobs', 'Data analyst', 'Part-time jobs'];
+const EMOJIS = ['😀', '😊', '👍', '🙏', '🎉', '💼', '🚀', '👋', '😅', '🤔', '✅', '❤️'];
+const MAX_LEN = 500;
+const NAME_KEY = 'applyra_chat_name';
+const CONSENT_KEY = 'applyra_chat_consent_closed';
 
-function safeUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
-  } catch {
-    return null;
-  }
-}
+const safeUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
+const store = {
+  get(k) { try { return window.localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { window.localStorage.setItem(k, v); } catch {} },
+};
 
-/** Reads a server-sent-events response and calls onEvent(name, data) for each event. */
-async function readEvents(res, onEvent) {
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+// ---- widget message <-> database message ---------------------------------------------
+// widget: { role: 'bot' | 'user', text, jobs }     database: { role: 'assistant' | 'user', content, meta }
+const slimJobs = (jobs) =>
+  (Array.isArray(jobs) ? jobs : []).slice(0, 10).map((j) => ({
+    id: j.id, title: j.title, company: j.company, location: j.location, url: j.url,
+  }));
 
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+const toDb = (m) => ({
+  role: m.role === 'bot' ? 'assistant' : 'user',
+  content: String(m.text).slice(0, 20000),
+  ...(m.jobs?.length ? { meta: { jobs: slimJobs(m.jobs) } } : {}),
+});
 
-    let index;
-    while ((index = buffer.indexOf('\n\n')) !== -1) {
-      const block = buffer.slice(0, index);
-      buffer = buffer.slice(index + 2);
+const fromDb = (m) => ({
+  id: `db${m.id}`,
+  role: m.role === 'assistant' ? 'bot' : 'user',
+  text: m.content,
+  jobs: m.meta?.jobs,
+});
 
-      let event = 'message';
-      let data = '';
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event:')) event = line.slice(6).trim();
-        else if (line.startsWith('data:')) data += line.slice(5).trim();
-      }
-      if (!data) continue;
-
-      try {
-        onEvent(event, JSON.parse(data));
-      } catch {}
-    }
-  }
-}
-
-function ChatIcon() {
+function Sparkle({ size = 20 }) {
   return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />
-      <path d="M9 11h6M9 14h3" />
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2c.6 5.5 4.5 9.4 10 10-5.5.6-9.4 4.5-10 10-.6-5.5-4.5-9.4-10-10 5.5-.6 9.4-4.5 10-10z" fill="#FFE23A" />
     </svg>
   );
 }
 
-function CloseIcon() {
+function Avatar({ size = 'sm', online = false }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-      <path d="M6 6l12 12M18 6 6 18" />
-    </svg>
+    <span className={`ac__ava ac__ava--${size}`} aria-hidden="true">
+      <Sparkle size={size === 'lg' ? 22 : 13} />
+      {online && <i className="ac__online" />}
+    </span>
   );
 }
 
-export default function ChatWidget() {
-  const [lang, setLang] = useState('en');
+export default function ChatWidget({ loggedIn = false }) {
+  const panelId = useId();
+  const searchParams = useSearchParams();
+  const chatParam = searchParams.get('chat');
+
   const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState('checking'); // checking | needs_key | ready
-  const [messages, setMessages] = useState([WELCOME]);
-  const [lastSearch, setLastSearch] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [topicsOpen, setTopicsOpen] = useState(false);
+  const [consentClosed, setConsentClosed] = useState(true); // true until we know (avoids a flash)
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [stage, setStage] = useState('');
-  const [keyInput, setKeyInput] = useState('');
-  const [keyBusy, setKeyBusy] = useState(false);
-  const [keyError, setKeyError] = useState(''); // an error code, translated when rendered
+  const [sending, setSending] = useState(false);
+  const [awaitingName, setAwaitingName] = useState(false);
+  const [userName, setUserName] = useState('');
+
+  // history
+  const [conversationId, setConversationId] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState(null); // null = not loaded yet
+
+  const started = useRef(false);
+  const epoch = useRef(0); // bumps whenever the conversation is replaced, so a slow greeting cannot overwrite it
+  const convIdRef = useRef(null);
+  const saveQueue = useRef(Promise.resolve());
+  const clientUuid = useRef(null);
+  const launcher = useRef(null);
+  const field = useRef(null);
   const endRef = useRef(null);
-  const inputRef = useRef(null);
+  const handledParam = useRef(null);
+  const wasLoggedIn = useRef(loggedIn);
 
-  const t = STRINGS[lang] || STRINGS.en;
-  const rtl = lang === 'ar';
+  if (clientUuid.current === null && typeof window !== 'undefined') clientUuid.current = newClientId();
 
-  // Language: saved choice, else the browser language.
-  useEffect(() => {
-    setLang(initialLang());
+  const setConv = useCallback((id) => {
+    convIdRef.current = id;
+    setConversationId(id);
   }, []);
 
-  function toggleLang() {
-    const next = lang === 'ar' ? 'en' : 'ar';
-    setLang(next);
-    try {
-      localStorage.setItem(LANG_KEY, next);
-    } catch {}
-  }
+  // Real chat turns only (greeting, name questions and error replies are not saved).
+  const savable = useMemo(
+    () => messages.filter((m) => !m.skip && !m.failed && m.text).map(toDb),
+    [messages]
+  );
 
-  // Restore the conversation for this browser tab (the API key is never stored here).
+  const { visible: promptVisible, accept, decline } = useGuestSavePrompt({
+    loggedIn,
+    messages: savable,
+    busy: sending,
+    clientUuid: clientUuid.current,
+  });
+
   useEffect(() => {
-    try {
-      const saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null');
-      if (saved && Array.isArray(saved.messages) && saved.messages.length) {
-        const restored = saved.messages
-          .filter((m) => !(m.pending && !m.text && !m.jobs?.length))
-          .map((m) => ({ ...m, pending: false }))
-          .slice(-30);
-        if (restored.length) setMessages(restored);
-        setLastSearch(saved.lastSearch || null);
-      }
-    } catch {}
+    setConsentClosed(store.get(CONSENT_KEY) === '1');
   }, []);
 
-  useEffect(() => {
+  // The greeting is built when the window first opens: visitor's clock + account (or remembered) name.
+  const start = useCallback(async () => {
+    if (started.current) return;
+    started.current = true;
+    const mine = epoch.current;
+    let name = '';
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ messages: messages.slice(-30), lastSearch }));
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2500);
+      const res = await fetch('/api/chat/user', { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(t);
+      if (res.ok) name = ((await res.json()).name || '').trim();
     } catch {}
-  }, [messages, lastSearch]);
+    if (!name) name = (store.get(NAME_KEY) || '').trim();
+    if (epoch.current !== mine) return; // a saved conversation was opened meanwhile
 
-  // Ask the server whether a key is already connected (first time the panel opens).
-  useEffect(() => {
-    if (!open || status !== 'checking') return;
-    let cancelled = false;
-    fetch('/chat-api/status', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setStatus(d.connected ? 'ready' : 'needs_key');
-      })
-      .catch(() => {
-        if (!cancelled) setStatus('needs_key');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, status]);
+    const greeting = greetingFor();
+    setUserName(name);
+    if (name) {
+      setAwaitingName(false);
+      setMessages([{ id: 'hello', role: 'bot', skip: true, text: `${greeting} ${name}! Which job are you looking for today?` }]);
+    } else {
+      setAwaitingName(true);
+      setMessages([{ id: 'hello', role: 'bot', skip: true, text: `${greeting}. Welcome to Applyra. Please tell me your name so I can assist you better.` }]);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open) return;
+    start();
+    const t = setTimeout(() => field.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, [open, start]);
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
-    if (status === 'ready' && !busy) inputRef.current?.focus();
-  }, [open, status, messages, busy, stage]);
+  }, [messages, sending, open, topicsOpen]);
 
-  async function connect(e) {
-    e.preventDefault();
-    if (keyBusy) return;
-    setKeyBusy(true);
-    setKeyError('');
+  // ---- history -------------------------------------------------------------------------
+  const refreshHistory = useCallback(async () => {
     try {
-      const res = await fetch('/chat-api/key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: keyInput.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setKeyError(data.code || 'error');
-        return;
-      }
-      setKeyInput('');
-      setStatus('ready');
+      setHistory(await listConversations());
     } catch {
-      setKeyError('unreachable');
-    } finally {
-      setKeyBusy(false);
+      setHistory([]);
     }
+  }, []);
+
+  function openConversation(conv) {
+    epoch.current += 1;
+    started.current = true;
+    setAwaitingName(false);
+    setTopicsOpen(false);
+    setEmojiOpen(false);
+    setHistoryOpen(false);
+    setMenuOpen(false);
+    setMessages((conv.messages || []).map(fromDb));
+    setConv(conv.id);
+    clientUuid.current = newClientId();
   }
 
-  async function disconnect() {
-    try {
-      await fetch('/chat-api/key', { method: 'DELETE' });
-    } catch {}
-    setStatus('needs_key');
-    setKeyError('');
+  async function openFromHistory(id) {
+    const conv = await loadConversation(id);
+    if (conv) openConversation(conv);
+    else refreshHistory(); // it was deleted or is not yours
   }
 
-  /** Replace the last message (the bot placeholder) using fn(previous). */
-  function patchLast(fn) {
-    setMessages((m) => (m.length ? [...m.slice(0, -1), fn(m[m.length - 1])] : m));
+  function startFresh() {
+    epoch.current += 1;
+    started.current = false;
+    setConv(null);
+    clientUuid.current = newClientId();
+    setMessages([]);
+    setTopicsOpen(false);
+    setHistoryOpen(false);
+    start();
   }
 
-  function botError(code) {
-    return { role: 'bot', error: code, jobs: [] };
+  async function removeConversation(id) {
+    if (!window.confirm('Delete this conversation?')) return;
+    const res = await deleteConversation(id);
+    if (res?.ok && id === convIdRef.current) startFresh();
+    refreshHistory();
   }
+
+  function toggleHistory() {
+    setMenuOpen(false);
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next) refreshHistory();
+  }
+
+  // After login the importer sends the user to /?chat=ID: open that conversation in the widget.
+  useEffect(() => {
+    if (!loggedIn || !chatParam || handledParam.current === chatParam) return;
+    handledParam.current = chatParam;
+    (async () => {
+      const conv = await loadConversation(chatParam);
+      if (conv) {
+        openConversation(conv);
+        setOpen(true);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, chatParam]);
+
+  // Logged out: wipe everything so the next person on this device never sees the previous chat.
+  useEffect(() => {
+    if (wasLoggedIn.current && !loggedIn) {
+      epoch.current += 1;
+      started.current = false;
+      setConv(null);
+      setHistory(null);
+      setHistoryOpen(false);
+      setMessages([]);
+      setUserName('');
+      setAwaitingName(false);
+      handledParam.current = null;
+      if (open) start();
+    }
+    wasLoggedIn.current = loggedIn;
+  }, [loggedIn, open, start, setConv]);
+
+  // Save one finished exchange, strictly in order (one request at a time).
+  function persist(pair) {
+    if (!loggedIn) return;
+    saveQueue.current = saveQueue.current.then(async () => {
+      try {
+        const r = await saveTurn({
+          conversationId: convIdRef.current,
+          clientUuid: clientUuid.current,
+          messages: pair,
+        });
+        if (r?.ok) {
+          if (r.id && !convIdRef.current) setConv(r.id);
+          if (history !== null || historyOpen) refreshHistory();
+        }
+      } catch {}
+    });
+  }
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setMenuOpen(false);
+    setEmojiOpen(false);
+    launcher.current?.focus();
+  }, []);
+
+  function resize(el) {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 110)}px`;
+  }
+
+  function addEmoji(emoji) {
+    const el = field.current;
+    const s = el?.selectionStart ?? input.length;
+    const e = el?.selectionEnd ?? input.length;
+    const next = (input.slice(0, s) + emoji + input.slice(e)).slice(0, MAX_LEN);
+    setInput(next);
+    setEmojiOpen(false);
+    setTimeout(() => {
+      el?.focus();
+      el?.setSelectionRange(s + emoji.length, s + emoji.length);
+    }, 0);
+  }
+
+  const push = (m) => setMessages((list) => [...list, { id: `${m.role}${Date.now()}${Math.random()}`, ...m }]);
 
   async function send(raw) {
-    const text = raw.trim();
-    if (!text || busy) return;
-
-    // Only real text goes back to the server as context (not the welcome text or error bubbles).
-    const history = messages
-      .filter((m) => !m.pending && m.text)
-      .slice(-8)
-      .map((m) => ({ role: m.role, text: m.text }));
-
-    setMessages((m) => [...m, { role: 'user', text }, { role: 'bot', text: '', jobs: [], pending: true }]);
+    const text = (raw ?? input).trim();
+    if (!text || sending) return;
     setInput('');
-    setStage('planning');
-    setBusy(true);
+    setTopicsOpen(false);
+    setEmojiOpen(false);
+    setHistoryOpen(false);
+    if (field.current) field.current.style.height = 'auto';
+    // Conversation memory sent to the server: real chat turns only (onboarding turns are flagged skip).
+    const history = messages
+      .filter((m) => !m.skip && m.text)
+      .slice(-8)
+      .map((m) => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: String(m.text).slice(0, 1000) }));
+    push({ role: 'user', text, skip: awaitingName });
 
-    let finished = false;
-    let keyProblem = null;
+    // First reply of a guest is their name.
+    if (awaitingName) {
+      const name = text.replace(/[^\p{L}\p{N} '\-]/gu, '').trim().slice(0, 40);
+      if (!name) {
+        push({ role: 'bot', skip: true, text: 'Please type your name using letters, for example "Sara".' });
+        return;
+      }
+      store.set(NAME_KEY, name);
+      setUserName(name);
+      setAwaitingName(false);
+      push({ role: 'bot', skip: true, text: `Nice to meet you, ${name}. Which job are you looking for?` });
+      return;
+    }
 
+    setSending(true);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 45000); // the AI can take a while; do not hang forever
     try {
-      const res = await fetch('/chat-api/stream', {
+      const res = await fetch('/api/backend/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, last_search: lastSearch, lang }),
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ message: text, history, user_name: userName || undefined }),
       });
+      const data = await res.json().catch(() => ({}));
+      let reply;
+      if (res.status === 429) reply = 'You are sending messages very fast. Wait a few seconds and try again.';
+      else if (res.status === 422) reply = 'That message could not be sent. Keep it under 500 characters and try again.';
+      else if (res.ok) reply = data.reply;
+      else reply = 'Sorry, I could not reach the assistant. Try again in a moment.';
 
-      const isStream = (res.headers.get('content-type') || '').includes('text/event-stream');
-
-      if (!res.ok || !res.body || !isStream) {
-        const data = await res.json().catch(() => null);
-        const code = data?.code || 'error';
-        finished = true;
-
-        if (KEY_PROBLEMS.includes(code)) {
-          keyProblem = code;
-        } else {
-          patchLast(() => botError(code));
-        }
-      } else {
-        await readEvents(res, (event, data) => {
-          if (event === 'status') {
-            setStage(data.stage || '');
-          } else if (event === 'jobs') {
-            patchLast((m) => ({ ...m, jobs: data.jobs || [], total: data.total || 0 }));
-          } else if (event === 'token') {
-            patchLast((m) => ({ ...m, text: (m.text || '') + (data.t || '') }));
-          } else if (event === 'done') {
-            finished = true;
-            setLastSearch(data.last_search || null);
-            patchLast(() => ({
-              role: 'bot',
-              text: data.reply || '',
-              jobs: data.jobs || [],
-              total: data.total || 0,
-              searchUrl: data.search_url,
-              followUps: data.follow_ups || [],
-              mode: data.mode,
-              reranked: Boolean(data.reranked),
-            }));
-          } else if (event === 'error') {
-            finished = true;
-            const code = data.code || 'error';
-            if (KEY_PROBLEMS.includes(code)) {
-              keyProblem = code;
-            } else {
-              patchLast(() => botError(code));
-            }
-          }
-        });
-      }
-    } catch {
-      // network error or the stream was cut: handled below
+      const botMsg = {
+        role: 'bot',
+        text: reply || 'Sorry, I have no answer for that.',
+        jobs: res.ok ? data.jobs : undefined,
+        failed: !res.ok,
+      };
+      push(botMsg);
+      if (res.ok) persist([toDb({ role: 'user', text }), toDb(botMsg)]);
+    } catch (err) {
+      push({
+        role: 'bot',
+        failed: true,
+        text: err?.name === 'AbortError' ? 'That took too long. Please try again.' : 'Network error. Check your connection and try again.',
+      });
     } finally {
-      if (keyProblem) {
-        // The key cannot be used (wrong, no credit, no access): back to the connect form, message kept.
-        setMessages((m) => m.slice(0, -2));
-        setInput(text);
-        setKeyError(keyProblem);
-        setStatus('needs_key');
-      } else if (!finished) {
-        patchLast((m) => (m.text || m.jobs?.length ? { ...m, pending: false } : botError('network')));
-      }
-      setStage('');
-      setBusy(false);
+      clearTimeout(timer);
+      setSending(false);
+      field.current?.focus();
     }
   }
 
-  function reset() {
-    setMessages([WELCOME]);
-    setLastSearch(null);
-    try {
-      sessionStorage.removeItem(STORAGE_KEY);
-    } catch {}
+  function onKeyDown(e) {
+    // Enter sends, Shift+Enter adds a new line (IME composition is left alone)
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      send();
+    }
   }
 
-  const onlyWelcome = messages.length === 1;
-  const lastIndex = messages.length - 1;
+  const showChips = (messages.length <= 1 && !awaitingName && !sending) || topicsOpen;
 
   return (
-    <>
+    <div className="ac" onKeyDown={(e) => e.key === 'Escape' && open && close()}>
       {open && (
         <section
-          id="chat-panel"
-          className="cb-panel"
+          id={panelId}
+          className={`ac__panel${expanded ? ' ac__panel--wide' : ''}`}
           role="dialog"
-          dir={rtl ? 'rtl' : 'ltr'}
-          lang={lang}
-          aria-label={t.title}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setOpen(false);
-          }}
+          aria-modal="false"
+          aria-label="Applyra job assistant"
         >
-          <header className="cb-head">
-            <span className="cb-avatar" aria-hidden="true"><ChatIcon /></span>
-            <div className="cb-title">
-              <strong>{t.title}</strong>
-              <span>{t.powered}</span>
-            </div>
-            <button type="button" className="cb-icon cb-lang" onClick={toggleLang} aria-label={t.switchLabel} lang={rtl ? 'en' : 'ar'}>
-              {t.switchTo}
-            </button>
-            {status === 'ready' && (
-              <>
-                <button type="button" className="cb-icon" onClick={reset} title={t.newChatTitle}>{t.newChat}</button>
-                <button type="button" className="cb-icon" onClick={disconnect} title={t.disconnectTitle}>
-                  {t.disconnect}
-                </button>
-              </>
-            )}
-            <button type="button" className="cb-icon" onClick={() => setOpen(false)} aria-label={t.close}>
-              <CloseIcon />
-            </button>
-          </header>
-
-          {status === 'checking' && (
-            <div className="cb-body"><p className="cb-note">{t.loading}</p></div>
-          )}
-
-          {status === 'needs_key' && (
-            <div className="cb-body">
-              <form className="cb-connect" onSubmit={connect}>
-                <h3>{t.connectTitle}</h3>
-                <p>{t.connectBody}</p>
-                <p className="cb-note">{t.connectHint}</p>
-                {keyError && <p className="cb-error" role="alert">{errorText(lang, keyError)}</p>}
-                <label htmlFor="openai-key" className="sr">{t.keyLabel}</label>
-                <input
-                  id="openai-key"
-                  type="password"
-                  dir="ltr"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder={t.keyPlaceholder}
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                />
-                <button type="submit" disabled={keyBusy || keyInput.trim().length < 20}>
-                  {keyBusy ? t.connecting : t.connectButton}
-                </button>
-                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
-                  {t.getKey}
-                </a>
-              </form>
-            </div>
-          )}
-
-          {status === 'ready' && (
-            <>
-              <div className="cb-body" role="log" aria-live="polite" aria-relevant="additions">
-                {messages.map((m, i) => {
-                  const waiting = m.pending && !m.text && !m.jobs?.length;
-                  const body = m.welcome ? t.welcome : m.error ? errorText(lang, m.error) : m.text || '';
-
-                  return (
-                    <div key={i} className={m.role === 'user' ? 'cb-row user' : 'cb-row'}>
-                      <div
-                        className={
-                          m.role === 'user' ? 'cb-bubble user' : waiting ? 'cb-bubble cb-typing' : 'cb-bubble'
-                        }
-                        aria-label={waiting ? t.typing : undefined}
-                      >
-                        {waiting ? (
-                          <>
-                            <span /><span /><span />
-                          </>
-                        ) : (
-                          <>
-                            {body.split('\n').map((line, k) => (
-                              <p key={k} dir="auto">{line}</p>
-                            ))}
-
-                            {m.jobs?.length > 0 && (
-                              <ul className="cb-jobs">
-                                {m.jobs.map((j) => {
-                                  const href = safeUrl(j.url);
-                                  const inner = (
-                                    <>
-                                      <span className="cb-job-title" dir="auto">{j.title}</span>
-                                      <span className="cb-job-meta" dir="auto">
-                                        {j.company}
-                                        {j.location ? ` · ${j.location}` : ''}
-                                      </span>
-                                      {j.why && <span className="cb-why" dir="auto">{j.why}</span>}
-                                      <span className="cb-job-foot">
-                                        <span className="cb-job-tag">{j.source_label}</span>
-                                        {j.match != null && <span className="cb-match">{t.match(j.match)}</span>}
-                                      </span>
-                                    </>
-                                  );
-                                  return (
-                                    <li key={j.id}>
-                                      {href ? (
-                                        <a className="cb-job" href={href} target="_blank" rel="nofollow noopener noreferrer">{inner}</a>
-                                      ) : (
-                                        <span className="cb-job">{inner}</span>
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            )}
-
-                            {m.mode === 'keyword' && m.jobs?.length > 0 && (
-                              <p className="cb-note">{t.keywordNote}</p>
-                            )}
-
-                            {m.searchUrl && m.jobs?.length > 0 && !m.pending && (
-                              <Link className="cb-more" href={m.searchUrl} prefetch={false} onClick={() => setOpen(false)}>
-                                {t.openSearch}
-                              </Link>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {busy && stage && t.stages[stage] && <p className="cb-note cb-stage">{t.stages[stage]}</p>}
-
-                {!busy && onlyWelcome && (
-                  <ul className="cb-suggest" aria-label={t.suggestionsLabel}>
-                    {t.suggestions.map((s) => (
-                      <li key={s}><button type="button" onClick={() => send(s)}>{s}</button></li>
-                    ))}
-                  </ul>
+          <div className="ac__bar">
+            <button type="button" className="ac__round" onClick={() => setExpanded((v) => !v)} aria-label={expanded ? 'Make chat smaller' : 'Make chat larger'}>
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                {expanded ? (
+                  <path d="M9 3v6H3M15 21v-6h6M3 9l6-6M21 15l-6 6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                ) : (
+                  <path d="M4 10V4h6M20 14v6h-6M4 4l6 6M20 20l-6-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                 )}
-
-                {!busy && messages[lastIndex]?.followUps?.length > 0 && (
-                  <ul className="cb-suggest" aria-label={t.followUpsLabel}>
-                    {messages[lastIndex].followUps.map((s) => (
-                      <li key={s}><button type="button" onClick={() => send(s)} dir="auto">{s}</button></li>
-                    ))}
-                  </ul>
-                )}
-                <div ref={endRef} />
-              </div>
-
-              <form
-                className="cb-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  send(input);
-                }}
-              >
-                <input
-                  ref={inputRef}
-                  type="text"
-                  dir="auto"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={t.inputPlaceholder}
-                  aria-label={t.inputLabel}
-                  maxLength={500}
-                  autoComplete="off"
-                  enterKeyHint="send"
-                />
-                <button type="submit" disabled={busy || !input.trim()} aria-label={t.send}>
-                  <svg className="cb-send-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+            </button>
+            <div className="ac__bar-right">
+              <div className="ac__menuwrap">
+                <button type="button" className="ac__round" onClick={() => setMenuOpen((v) => !v)} aria-label="More options" aria-expanded={menuOpen} aria-haspopup="menu">
+                  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="5" cy="12" r="2" fill="currentColor" /><circle cx="12" cy="12" r="2" fill="currentColor" /><circle cx="19" cy="12" r="2" fill="currentColor" />
                   </svg>
                 </button>
-              </form>
-            </>
+                {menuOpen && (
+                  <div className="ac__menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); startFresh(); }}>Start a new conversation</button>
+                    {loggedIn && (
+                      <button type="button" role="menuitem" onClick={toggleHistory}>
+                        {historyOpen ? 'Back to chat' : 'Chat history'}
+                      </button>
+                    )}
+                    <button type="button" role="menuitem" onClick={close}>Close chat</button>
+                  </div>
+                )}
+              </div>
+              <button type="button" className="ac__round" onClick={close} aria-label="Close chat">
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div className="ac__agent">
+            <Avatar size="lg" online />
+            <div>
+              <strong>Applyra Assistant</strong>
+              <span>AI job assistant</span>
+            </div>
+          </div>
+
+          {historyOpen ? (
+            <div className="ac__history">
+              <h3>Your conversations</h3>
+              {history === null && <p className="empty">Loading…</p>}
+              {history !== null && history.length === 0 && (
+                <p className="empty">Your saved conversations will appear here.</p>
+              )}
+              {history !== null && history.length > 0 && (
+                <ul>
+                  {history.map((c) => (
+                    <li key={c.id} className={c.id === conversationId ? 'is-active' : undefined}>
+                      <button type="button" onClick={() => openFromHistory(c.id)}>
+                        <span className="t">{c.title}</span>
+                        <span className="d">{new Date(c.updated_at).toLocaleDateString()}</span>
+                      </button>
+                      <button type="button" className="x" onClick={() => removeConversation(c.id)} aria-label={`Delete ${c.title}`}>
+                        &times;
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : (
+            <div className="ac__log" role="log" aria-live="polite" aria-relevant="additions">
+              {messages.map((m) => (
+                <div key={m.id} className={`ac__msg ac__msg--${m.role}`}>
+                  {m.role === 'bot' ? (
+                    <div className="ac__botrow">
+                      <Avatar />
+                      <div className="ac__text">{m.text}</div>
+                    </div>
+                  ) : (
+                    <div className="ac__bubble">{m.text}</div>
+                  )}
+                  {m.jobs?.length > 0 && (
+                    <ul className="ac__jobs">
+                      {m.jobs.map((j) => (
+                        <li key={j.id ?? j.title}>
+                          {safeUrl(j.url) ? (
+                            <a href={safeUrl(j.url)} target="_blank" rel="noopener noreferrer">{j.title}</a>
+                          ) : (
+                            <strong>{j.title}</strong>
+                          )}
+                          <span>{[j.company, j.location].filter(Boolean).join(' · ')}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+
+              {showChips && (
+                <div className="ac__chips">
+                  {SUGGESTIONS.map((s) => (
+                    <button key={s} type="button" onClick={() => send(s)}>{s}</button>
+                  ))}
+                </div>
+              )}
+
+              {sending && (
+                <div className="ac__msg ac__msg--bot" aria-label="Assistant is typing">
+                  <div className="ac__botrow">
+                    <Avatar />
+                    <div className="ac__typing"><i /><i /><i /></div>
+                  </div>
+                </div>
+              )}
+              <div ref={endRef} />
+            </div>
           )}
+
+          {/* Guests only: "save this conversation?"  OK -> login, then saved.  No -> nothing happens. */}
+          <SaveChatPrompt visible={promptVisible && !historyOpen} onAccept={accept} onDecline={decline} />
+
+          {!consentClosed && (
+            <div className="ac__consent" role="note">
+              <p>By chatting here, you agree that your messages are processed to search job listings.</p>
+              <button
+                type="button"
+                className="ac__consent-x"
+                aria-label="Dismiss notice"
+                onClick={() => { setConsentClosed(true); store.set(CONSENT_KEY, '1'); }}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+          )}
+
+          <form className="ac__form" onSubmit={(e) => { e.preventDefault(); send(); }}>
+            {emojiOpen && (
+              <div className="ac__emoji" role="group" aria-label="Emoji">
+                {EMOJIS.map((em) => (
+                  <button key={em} type="button" onClick={() => addEmoji(em)} aria-label={`Insert ${em}`}>{em}</button>
+                ))}
+              </div>
+            )}
+            <div className="ac__pill">
+              <button
+                type="button"
+                className="ac__icon ac__icon--dark"
+                onClick={() => { setTopicsOpen((v) => !v); setEmojiOpen(false); }}
+                aria-label="Show suggested searches"
+                aria-pressed={topicsOpen}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" /></svg>
+              </button>
+              <label htmlFor={`${panelId}-in`} className="ac__sr">Message</label>
+              <textarea
+                id={`${panelId}-in`}
+                ref={field}
+                rows={1}
+                value={input}
+                maxLength={MAX_LEN}
+                placeholder={awaitingName ? 'Type your name…' : 'Write a message…'}
+                onChange={(e) => { setInput(e.target.value); resize(e.target); }}
+                onKeyDown={onKeyDown}
+              />
+              <button
+                type="button"
+                className="ac__icon ac__icon--ghost"
+                onClick={() => { setEmojiOpen((v) => !v); setTopicsOpen(false); }}
+                aria-label="Add emoji"
+                aria-pressed={emojiOpen}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" strokeWidth="2" />
+                  <circle cx="9" cy="10" r="1.2" fill="currentColor" /><circle cx="15" cy="10" r="1.2" fill="currentColor" />
+                  <path d="M8 14.2c1 1.5 2.4 2.2 4 2.2s3-.7 4-2.2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button type="submit" className="ac__send" disabled={!input.trim() || sending} aria-label="Send message">
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </button>
+            </div>
+            {input.length > MAX_LEN - 80 && <span className="ac__count">{input.length}/{MAX_LEN}</span>}
+          </form>
         </section>
       )}
 
       <button
+        ref={launcher}
         type="button"
-        className="cb-launch"
-        onClick={() => setOpen(!open)}
-        aria-label={open ? t.closeLabel : t.openLabel}
+        className="ac__launcher"
+        onClick={() => (open ? close() : setOpen(true))}
         aria-expanded={open}
-        aria-controls="chat-panel"
+        aria-controls={open ? panelId : undefined}
+        aria-label={open ? 'Close chat' : 'Open job assistant chat'}
       >
-        {open ? <CloseIcon /> : <ChatIcon />}
+        <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="currentColor" />
+          <circle cx="8.5" cy="11" r="1.3" fill="#fff" /><circle cx="12.5" cy="11" r="1.3" fill="#fff" /><circle cx="16.5" cy="11" r="1.3" fill="#fff" />
+        </svg>
       </button>
-    </>
+    </div>
   );
 }

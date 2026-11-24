@@ -8,12 +8,13 @@ import SubmitButton from './SubmitButton';
 
 const INITIAL = { errors: {}, error: '', success: '', values: {} };
 
-export default function RegisterForm() {
+export default function RegisterForm({ next = '/' }) {
   const [state, action] = useActionState(registerAction, INITIAL);
 
   return (
     <form action={action} className="auth-form">
       {state.error && <p className="alert" role="alert">{state.error}</p>}
+      <input type="hidden" name="next" value={next} />
 
       <Field
         id="name"
@@ -52,7 +53,6 @@ export default function RegisterForm() {
         minLength={8}
         error={state.errors.password_confirmation}
       />
-
       <SubmitButton pendingLabel="Creating account...">Create account</SubmitButton>
     </form>
   );

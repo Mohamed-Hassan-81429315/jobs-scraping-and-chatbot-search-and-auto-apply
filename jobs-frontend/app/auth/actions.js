@@ -46,8 +46,8 @@ export async function registerAction(_prev, formData) {
 
   if (!res.ok) return fail(res, values);
 
-  await setSession(res.data.token);
-  redirect('/');
+  // The user must log in after registering: no session is created here.
+  redirect(`/login?registered=1&next=${encodeURIComponent(safeNext(formData.get('next')))}`);
 }
 
 export async function loginAction(_prev, formData) {

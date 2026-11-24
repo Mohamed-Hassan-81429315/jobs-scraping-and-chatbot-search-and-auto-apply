@@ -1,9 +1,12 @@
 import './globals.css';
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { Inter, Space_Grotesk } from 'next/font/google';
 import { BRAND } from '../lib/brand';
+import { getUser } from '../lib/auth';
 import { LogoMark } from '../components/Logo';
 import UserMenu from '../components/UserMenu';
+import ChatBootstrap from '../components/chat/ChatBootstrap';
 import ChatWidget from '../components/chat/ChatWidget';
 
 const body = Inter({ subsets: ['latin'], variable: '--font-body', display: 'swap' });
@@ -42,7 +45,9 @@ const organization = {
   description: BRAND.description,
 };
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
+  const user = await getUser(); // cached per request: UserMenu shares this call
+
   return (
     <html lang="en">
       <body className={`${body.variable} ${display.variable}`}>
@@ -63,12 +68,15 @@ export default function RootLayout({ children }) {
               <Link href="/?posted=24h" prefetch={false}>New today</Link>
             </nav>
             <UserMenu />
+            <ChatBootstrap />
           </div>
         </header>
 
         {children}
 
-        <ChatWidget />
+        <Suspense fallback={null}>
+          <ChatWidget loggedIn={Boolean(user)} />
+        </Suspense>
 
         <footer className="site-footer">
           <div className="wrap">

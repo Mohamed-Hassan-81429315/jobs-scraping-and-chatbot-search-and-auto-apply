@@ -42,7 +42,7 @@ REQUEST_TIMEOUT = 20
 EPAM_WORKERS = 10
 SMARTRECRUITERS_API = "https://api.smartrecruiters.com/v1/companies"
 SMARTRECRUITERS_WORKERS = 5
-DATE_UNTIL = datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+DATE_UNTIL = datetime.max.replace(tzinfo=timezone.utc)
 
 
 def get(url, params=None, retries=5):

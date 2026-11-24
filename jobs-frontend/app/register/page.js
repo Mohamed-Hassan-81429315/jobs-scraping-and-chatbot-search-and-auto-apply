@@ -11,16 +11,29 @@ export const metadata = {
   alternates: { canonical: '/register' },
 };
 
-export default async function RegisterPage() {
+function safeNext(value) {
+  const v = typeof value === 'string' ? value : '/';
+  return v.startsWith('/') && !v.startsWith('//') && !v.includes('\\') ? v : '/';
+}
+
+export default async function RegisterPage({ searchParams }) {
   if (await getUser()) redirect('/');
+
+  const sp = await searchParams;
+  const next = safeNext(sp?.next);
 
   return (
     <AuthShell
       title="Create your account"
-      lead="It only takes a minute."
-      footer={<>Already have an account? <Link href="/login" prefetch={false}>Log in</Link></>}
+      lead="It only takes a minute. You will log in right after."
+      footer={
+        <>
+          Already have an account?{' '}
+          <Link href={`/login?next=${encodeURIComponent(next)}`} prefetch={false}>Log in</Link>
+        </>
+      }
     >
-      <RegisterForm />
+      <RegisterForm next={next} />
     </AuthShell>
   );
 }

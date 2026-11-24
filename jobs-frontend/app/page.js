@@ -10,11 +10,22 @@ import FilterSidebar from '../components/FilterSidebar';
 import ActiveFilters from '../components/ActiveFilters';
 import JobCard from '../components/JobCard';
 import Pagination from '../components/Pagination';
+import { getUser } from '../lib/auth';
+import { loadConversation } from './chat/actions';
+import ChatHistorySidebar from '../components/chat/ChatHistorySidebar';
+import Chatbot from '../components/chat/ChatWidget';
+
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
 export async function generateMetadata({ searchParams }) {
-  const p = normalize(await searchParams);
+  const sp = await searchParams;
+  const p = normalize(sp);
+
+  // A saved conversation (?chat=ID) or a fresh chat (?new=...) is private: never index it.
+  if (sp?.chat || sp?.new) {
+    return { alternates: { canonical: '/' }, robots: { index: false, follow: false } };
+  }
 
   if (!hasFilters(p) && p.page === 1 && !p.sort) {
     return { alternates: { canonical: '/' } };
@@ -41,8 +52,15 @@ export async function generateMetadata({ searchParams }) {
 }
 
 export default async function Home({ searchParams }) {
-  const p = normalize(await searchParams);
+  const sp = await searchParams;
+  const p = normalize(sp);
 
+  // --- chat: who is the user, and which saved conversation (if any) is open -------------
+  // loadConversation only returns a chat that belongs to this user, otherwise null.
+  const user = await getUser();
+  const conv = user && sp?.chat ? await loadConversation(sp.chat) : null;
+
+  // --- jobs -----------------------------------------------------------------------------
   let stats = null;
   let data = null;
   let failed = false;
@@ -131,6 +149,23 @@ export default async function Home({ searchParams }) {
             <li><strong>{stats.by_source.length}</strong><span>platforms</span></li>
           </ul>
         )}
+      </section>
+
+      {/* Chatbot + (for logged-in users) their own chat history */}
+      <section
+        id="chat"
+        className={`chat-layout wrap${user ? ' has-history' : ''}`}
+        aria-label="Job search assistant"
+      >
+        {user && <ChatHistorySidebar activeId={conv?.id} />}
+        <div className="chat-main">
+          <Chatbot
+            key={conv?.id ?? sp?.new ?? 'new'}
+            loggedIn={Boolean(user)}
+            initialId={conv?.id ?? null}
+            initialMessages={conv?.messages ?? []}
+          />
+        </div>
       </section>
 
       <section className="platforms wrap" aria-labelledby="platforms-title">

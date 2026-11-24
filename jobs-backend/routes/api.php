@@ -24,3 +24,5 @@ Route::prefix('auth')->group(function () {
 Route::post('/forgot-password', [\App\Http\Controllers\AuthController::class, 'forgotPassword'])->middleware('throttle:10,1');
 Route::post('/reset-password', [\App\Http\Controllers\AuthController::class, 'resetPassword'])->middleware('throttle:10,1');
 Route::post('/update-password', [\App\Http\Controllers\AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
+
+require __DIR__ . '/chat.php';
