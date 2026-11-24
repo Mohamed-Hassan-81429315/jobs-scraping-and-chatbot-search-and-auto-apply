@@ -41,7 +41,7 @@ export default function Image() {
           <div style={{ fontSize: 116, fontWeight: 800, letterSpacing: -4, marginLeft: 32 }}>{BRAND.name}</div>
         </div>
         <div style={{ fontSize: 42, color: '#a3accb', marginTop: 30 }}>
-          {BRAND.tagline} Search jobs from every platform.
+          {`${BRAND.tagline} Search jobs from every platform.`}
         </div>
       </div>
     ),

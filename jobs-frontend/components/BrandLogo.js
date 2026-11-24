@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 
 export function LogoMark({ size = 36 }) {
   return (
@@ -10,10 +11,14 @@ export function LogoMark({ size = 36 }) {
   );
 }
 
-export default function BrandLogo({ light = false }) {
+export default function BrandLogo({ light = false, image = false }) {
   return (
     <Link href="/" className={`brand${light ? ' brand--light' : ''}`} aria-label="Applyra home">
-      <LogoMark />
+      {image ? (
+        <Image src="/applyra-logo.png" alt="" width={36} height={36} priority style={{ width: 36, height: 'auto' }} />
+      ) : (
+        <LogoMark />
+      )}
       <span className="brand__word">Applyra</span>
     </Link>
   );

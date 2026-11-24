@@ -8,7 +8,7 @@ export default async function SiteHeader() {
   return (
     <header className="site-header">
       <div className="site-header__inner">
-        <BrandLogo />
+        <BrandLogo image />
         <nav aria-label="Account" className="site-header__nav">
           {user ? (
             <>
