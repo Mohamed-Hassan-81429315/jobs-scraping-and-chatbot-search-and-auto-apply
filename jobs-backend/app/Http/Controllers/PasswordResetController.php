@@ -107,7 +107,7 @@ class PasswordResetController extends Controller
         ]);
 
         try {
-            Mail::to($user->email)->send(new PasswordOtpMail($code, self::TTL_MINUTES));
+            Mail::to($user->email)->send(new PasswordOtpMail($code, self::TTL_MINUTES, $user->name ?: 'there'));
         } catch (\Throwable $e) {
             Log::error('Password reset code email failed: ' . $e->getMessage());
             DB::table(self::TABLE)->where('email', $key)->delete(); // do not lock the user in the cooldown

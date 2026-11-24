@@ -1,0 +1,45 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Mail\PasswordOtpMail;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Tests\TestCase;
+
+class PasswordOtpMailTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_forgot_password_sends_a_branded_single_use_code_email(): void
+    {
+        Mail::fake();
+        $user = User::factory()->create([
+            'name' => 'Sara Ali',
+            'email' => 'sara@example.com',
+        ]);
+
+        $this->postJson('/api/auth/forgot-password', ['email' => $user->email])
+            ->assertOk()
+            ->assertJsonPath('message', 'If that email has an account, a 6-digit code is on its way.');
+
+        Mail::assertSent(PasswordOtpMail::class, function (PasswordOtpMail $mail) use ($user): bool {
+            $html = $mail->render();
+            $text = view('emails.password-otp-text', [
+                'code' => $mail->code,
+                'minutes' => $mail->minutes,
+                'name' => $mail->name,
+            ])->render();
+
+            return $mail->hasTo($user->email)
+                && $mail->name === 'Sara Ali'
+                && $mail->minutes === 10
+                && preg_match('/^\d{6}$/', $mail->code) === 1
+                && str_contains($html, 'Please verify your identity, Sara Ali')
+                && str_contains($html, 'Here is your Applyra password reset verification code:')
+                && str_contains($html, 'This code is valid for')
+                && str_contains($text, $mail->code);
+        });
+    }
+}
