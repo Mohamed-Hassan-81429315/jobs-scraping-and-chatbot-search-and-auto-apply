@@ -24,6 +24,7 @@ export default async function UserMenu() {
       </summary>
       <div className="usermenu-panel">
         <p className="who">{user.email}</p>
+        <Link href="/account" prefetch={false}>My profile</Link>
         <Link href="/account/password" prefetch={false}>Change password</Link>
         <form action={logoutAction}>
           <button type="submit">Log out</button>
