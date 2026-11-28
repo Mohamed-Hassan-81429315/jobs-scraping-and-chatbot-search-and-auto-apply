@@ -35,3 +35,17 @@ Route::post('/reset-password', [\App\Http\Controllers\AuthController::class, 're
 Route::post('/update-password', [\App\Http\Controllers\AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
 
 require __DIR__ . '/chat.php';
+
+// --- profile: photo, personal details, CV and CV auto-fill ---------------------------------
+Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [\App\Http\Controllers\ProfileController::class, 'show']);
+    Route::put('/', [\App\Http\Controllers\ProfileController::class, 'update'])->middleware('throttle:30,1');
+    Route::get('/national-number', [\App\Http\Controllers\ProfileController::class, 'nationalNumber'])->middleware('throttle:10,1');
+    Route::get('/photo', [\App\Http\Controllers\ProfileController::class, 'photo']);
+    Route::post('/photo', [\App\Http\Controllers\ProfileController::class, 'uploadPhoto'])->middleware('throttle:20,1');
+    Route::delete('/photo', [\App\Http\Controllers\ProfileController::class, 'deletePhoto']);
+    Route::get('/cv', [\App\Http\Controllers\ProfileController::class, 'downloadCv']);
+    Route::post('/cv', [\App\Http\Controllers\ProfileController::class, 'uploadCv'])->middleware('throttle:10,1');
+    Route::post('/cv/autofill', [\App\Http\Controllers\ProfileController::class, 'autofill'])->middleware('throttle:20,1');
+    Route::delete('/cv', [\App\Http\Controllers\ProfileController::class, 'deleteCv']);
+});

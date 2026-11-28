@@ -451,3 +451,55 @@ a.cb-job:hover { border-color: rgba(94, 234, 212, .6); transform: translateY(-1p
   transform: none !important;
   margin: 0 auto !important;
 }
+
+/* profile (mobile first) */
+.pf-page { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; display: grid; gap: 16px; }
+.pf-page h1 { font-family: var(--font-display), sans-serif; font-size: 1.6rem; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.pf-head { display: flex; align-items: center; gap: 16px; }
+.pf-head__text { min-width: 0; }
+.pf-headline { color: var(--accent); font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+.pf-sub { color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
+.pf-avatar { flex: none; border-radius: 50%; object-fit: cover; display: block; border: 2px solid var(--line); background: var(--panel); }
+.pf-avatar--initials { display: grid; place-items: center; font-weight: 800; color: #06101f; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: 0; }
+.pf-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.pf-actions > * { flex: 1 1 140px; }
+.pf-actions--tight > * { flex: 0 1 auto; }
+.pf-card { padding: 18px 16px; border-radius: 20px; background: rgba(14, 19, 40, .82); border: 1px solid var(--line); display: grid; gap: 12px; }
+.pf-card h2 { font-family: var(--font-display), sans-serif; font-size: 1.05rem; }
+.pf-list { display: grid; gap: 0; margin: 0; }
+.pf-row { display: grid; gap: 2px; padding: 10px 0; border-top: 1px solid var(--line); }
+.pf-row:first-child { border-top: 0; padding-top: 0; }
+.pf-row dt { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pf-row dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.pf-empty { color: var(--muted); font-weight: 400; }
+.pf-mono { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .08em; }
+.pf-reveal { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pf-link { background: none; border: 0; padding: 6px 4px; min-height: 32px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; font-weight: 600; }
+.pf-err { color: #fca5a5; font-size: .82rem; font-weight: 400; }
+.pf-summary { color: #d5dbf2; white-space: pre-line; overflow-wrap: anywhere; }
+.pf-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.pf-chips li { padding: 6px 12px; border-radius: 999px; font-size: .85rem; background: rgba(94, 234, 212, .12); border: 1px solid rgba(94, 234, 212, .3); color: #99f6e4; }
+.pf-cv { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.pf-cv__name { font-weight: 600; overflow-wrap: anywhere; }
+.pf-editor { display: grid; gap: 16px; }
+.pf-photo { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.pf-photo__btns { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: 1 1 200px; }
+.pf-photo__btns .hint { flex-basis: 100%; }
+.pf-check { display: flex; align-items: center; gap: 10px; font-size: .9rem; color: var(--muted); min-height: 44px; }
+.pf-check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.pf-notice { min-height: 0; padding: 0; border-radius: 12px; font-size: .92rem; }
+.pf-notice--ok, .pf-notice--err, .pf-notice--warn { padding: 12px 14px; }
+.pf-notice--ok { background: rgba(94, 234, 212, .12); border: 1px solid rgba(94, 234, 212, .4); color: #99f6e4; }
+.pf-notice--err { background: rgba(248, 113, 113, .12); border: 1px solid rgba(248, 113, 113, .4); color: #fecaca; }
+.pf-notice--warn { background: rgba(250, 204, 21, .1); border: 1px solid rgba(250, 204, 21, .4); color: #fde68a; }
+.pf-form { gap: 16px; }
+.fld textarea { width: 100%; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, .05); color: var(--text); font: inherit; outline: none; resize: vertical; }
+.fld textarea:focus { border-color: rgba(94, 234, 212, .7); box-shadow: 0 0 0 4px rgba(94, 234, 212, .14); }
+.fld input[type="date"], .fld input[type="tel"] { min-height: 48px; }
+.pf-page input, .pf-page textarea { font-size: 16px; } /* stops iOS zooming into fields */
+@media (min-width: 640px) {
+  .pf-page { padding: 40px 20px 80px; }
+  .pf-card { padding: 24px; }
+  .pf-row { grid-template-columns: 180px 1fr; align-items: baseline; gap: 16px; }
+  .pf-actions > * { flex: 0 1 auto; }
+}
