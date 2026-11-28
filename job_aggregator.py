@@ -34,7 +34,7 @@ from email.utils import parsedate_to_datetime
 import requests
 
 
-SINCE = datetime(2019, 1, 1, tzinfo=timezone.utc)
+SINCE = datetime(2020, 1, 1, tzinfo=timezone.utc)
 HEADERS = {
     "User-Agent": "JobAggregator/1.0 (job aggregation script)"
 }
@@ -42,7 +42,7 @@ REQUEST_TIMEOUT = 20
 EPAM_WORKERS = 10
 SMARTRECRUITERS_API = "https://api.smartrecruiters.com/v1/companies"
 SMARTRECRUITERS_WORKERS = 5
-DATE_UNTIL = datetime.max.replace(tzinfo=timezone.utc)
+DATE_UNTIL = datetime.now(timezone.utc)
 
 
 def get(url, params=None, retries=5):
@@ -121,6 +121,16 @@ def parse_date(value):
 
     except (ValueError, TypeError, OverflowError, OSError):
         return None
+
+
+def within_date_window(value):
+    """Return whether a known posting date is within the configured UTC window.
+
+    Unknown dates are retained, but must not be represented as confirmed to
+    fall within the window.
+    """
+    posted = parse_date(value)
+    return posted is None or SINCE <= posted <= DATE_UNTIL
 
 
 def job(source, title, company, location, url, posted, description,
@@ -217,6 +227,44 @@ def fetch_remoteok():
             )
         except (KeyError, TypeError) as exc:
             print(f"[warn] Skipping malformed Remote OK job: {exc}")
+
+
+def fetch_indeed_authorized_export(path):
+    """Normalize jobs from a user-provided authorized Indeed API/export JSON.
+
+    This adapter does not make network requests or scrape Indeed pages. The
+    caller is responsible for supplying data obtained under an approved
+    Indeed integration and respecting its retention/display requirements.
+    """
+    from bs4 import BeautifulSoup
+
+    with open(path, encoding="utf-8") as file:
+        payload = json.load(file)
+    records = payload if isinstance(payload, list) else payload.get("jobs", [])
+    if not isinstance(records, list):
+        raise ValueError("Indeed export must be a JSON list or contain a jobs list")
+
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        description = item.get("description") or item.get("jobDescription") or ""
+        description_text = BeautifulSoup(str(description), "html.parser").get_text(
+            " ", strip=True
+        )
+        tags = item.get("tags") or item.get("attributes") or []
+        if isinstance(tags, str):
+            tags = [tags]
+        yield job(
+            "indeed",
+            item.get("title") or item.get("jobTitle"),
+            item.get("company") or item.get("companyName"),
+            item.get("location") or item.get("jobLocation"),
+            item.get("url") or item.get("jobUrl") or item.get("viewJobUrl"),
+            parse_date(item.get("posted_at") or item.get("datePosted") or item.get("date")),
+            description_text,
+            tags,
+            item,
+        )
 
 
 def fetch_themuse():
@@ -704,8 +752,9 @@ def fetch_epam(max_vacancies=100, workers=EPAM_WORKERS, known_urls=None):
 
 
 def run(out="jobs.json", include_themuse=False, epam_limit=100,
-        smartrecruiters_companies=None, smartrecruiters_limit=0):
-    """Run all enabled sources, merge with existing jobs, and save JSON."""
+        smartrecruiters_companies=None, smartrecruiters_limit=0,
+        selected_sources=None, indeed_json=None):
+    """Run selected sources, merge with existing jobs, and save JSON."""
     try:
         with open(out, encoding="utf-8") as file:
             previous_data = json.load(file)
@@ -713,34 +762,43 @@ def run(out="jobs.json", include_themuse=False, epam_limit=100,
                 item["id"]: item
                 for item in previous_data.get("jobs", [])
                 if item.get("id")
+                and within_date_window(item.get("posted_at"))
             }
     except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
         jobs = {}
 
-    sources = [
-        fetch_remotive,
-        fetch_arbeitnow,
-        fetch_remoteok,
-    ]
-
+    if selected_sources is None:
+        selected_sources = {"remotive", "arbeitnow", "remoteok", "epam"}
+    else:
+        selected_sources = set(selected_sources)
     if include_themuse:
-        sources.append(fetch_themuse)
-
+        selected_sources.add("themuse")
+    available = {
+        "remotive": fetch_remotive,
+        "arbeitnow": fetch_arbeitnow,
+        "remoteok": fetch_remoteok,
+    }
+    if include_themuse or "themuse" in selected_sources:
+        available["themuse"] = fetch_themuse
     if smartrecruiters_companies:
-        sources.append(
-            lambda: fetch_smartrecruiters(
-                smartrecruiters_companies,
-                max_per_company=smartrecruiters_limit,
-            )
+        available["smartrecruiters"] = lambda: fetch_smartrecruiters(
+            smartrecruiters_companies,
+            max_per_company=smartrecruiters_limit,
         )
-
-    # Use a wrapper so the EPAM limit can be passed to its fetcher.
+    if indeed_json:
+        available["indeed"] = lambda: fetch_indeed_authorized_export(indeed_json)
     known_epam = {
         item.get("url") for item in jobs.values() if item.get("source") == "epam"
     }
-    sources.append(
-        lambda: fetch_epam(max_vacancies=epam_limit, known_urls=known_epam)
+    available["epam"] = lambda: fetch_epam(
+        max_vacancies=epam_limit, known_urls=known_epam
     )
+    unknown = selected_sources - available.keys()
+    if unknown:
+        raise ValueError(
+            "Unavailable or unconfigured source(s): " + ", ".join(sorted(unknown))
+        )
+    sources = [available[name] for name in sorted(selected_sources)]
 
     for fetcher in sources:
         source_name = getattr(fetcher, "__name__", "fetch_epam")
@@ -751,9 +809,7 @@ def run(out="jobs.json", include_themuse=False, epam_limit=100,
 
         try:
             for item in fetcher():
-                posted = parse_date(item.get("posted_at"))
-
-                if posted is not None and (posted < SINCE or posted > DATE_UNTIL):
+                if not within_date_window(item.get("posted_at")):
                     continue
 
                 jobs[item["id"]] = item
@@ -780,6 +836,16 @@ def run(out="jobs.json", include_themuse=False, epam_limit=100,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Collect and normalize job postings."
+    )
+    parser.add_argument(
+        "--sources",
+        default="remotive,arbeitnow,remoteok,epam",
+        help="Comma-separated sources to run: remotive,arbeitnow,remoteok,epam,themuse,smartrecruiters,indeed.",
+    )
+    parser.add_argument(
+        "--indeed-json",
+        default="",
+        help="Path to a JSON export from an authorized Indeed API/integration; this does not scrape Indeed pages.",
     )
     parser.add_argument(
         "--loop",
@@ -824,6 +890,12 @@ if __name__ == "__main__":
     if args.smartrecruiters_limit < 0:
         parser.error("--smartrecruiters-limit must be zero or a positive number.")
 
+    selected_sources = {
+        source.strip().lower()
+        for source in args.sources.split(",")
+        if source.strip()
+    }
+
     # SmartRecruiters is handled by run_smartrecruiters.py (skips known jobs)
     smartrecruiters_companies = (
         load_smartrecruiters_companies(args.smartrecruiters_companies)
@@ -837,6 +909,8 @@ if __name__ == "__main__":
             epam_limit=args.epam_limit,
             smartrecruiters_companies=smartrecruiters_companies,
             smartrecruiters_limit=args.smartrecruiters_limit,
+            selected_sources=selected_sources,
+            indeed_json=args.indeed_json or None,
         )
 
         if not args.loop:

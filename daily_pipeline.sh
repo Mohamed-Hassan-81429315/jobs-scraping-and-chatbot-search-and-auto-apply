@@ -52,6 +52,10 @@ fi
 # 1) Scrape. A failing scraper must not stop the others.
 run_step "aggregator" "$PY" job_aggregator.py --epam-limit 0
 run_step "smartrecruiters" "$PY" run_smartrecruiters.py
+# LinkedIn + Indeed + Glassdoor through the licensed JSearch API (needs JSEARCH_API_KEY
+# in common_platforms.env). Exits 2 on a bad key / used-up quota, so it shows up as FAILED.
+run_step "linkedin-indeed-glassdoor" "$PY" scrape_jobboards.py \
+  --platforms linkedin,indeed,glassdoor --date-posted 3days --max-requests 20
 
 # 2) Validate the JSON before it touches the database.
 if ! "$PY" - "$JSON" <<'PYEOF'

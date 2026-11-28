@@ -30,6 +30,7 @@ class PasswordOtpMailTest extends TestCase
                 'code' => $mail->code,
                 'minutes' => $mail->minutes,
                 'name' => $mail->name,
+                'resetUrl' => 'http://x.test/reset-password?email=a#code=' . $mail->code,
             ])->render();
 
             return $mail->hasTo($user->email)
@@ -42,9 +43,8 @@ class PasswordOtpMailTest extends TestCase
                 && str_contains($html, 'Here is your Applyra password reset verification code:')
                 && str_contains($html, 'This code is valid for')
                 && str_contains($html, 'Copy OTP code')
-                && str_contains($html, '/reset-password?email=sara%40example.com')
-                && preg_match('~reset-password[^"]*' . $mail->code . '~', $html) !== 1 // the code is never in a link
-                && str_contains($text, $mail->code);
+                && str_contains($html, '/reset-password?email=sara%40example.com#code=' . $mail->code)
+                                && str_contains($text, $mail->code);
         });
     }
 }

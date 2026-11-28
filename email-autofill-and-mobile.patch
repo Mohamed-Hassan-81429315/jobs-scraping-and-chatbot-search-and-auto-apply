@@ -1,0 +1,131 @@
+diff --git a/jobs-backend/.env.example b/jobs-backend/.env.example
+index 40bb13b..4ecd179 100644
+--- a/jobs-backend/.env.example
++++ b/jobs-backend/.env.example
+@@ -63,3 +63,7 @@ AWS_BUCKET=
+ AWS_USE_PATH_STYLE_ENDPOINT=false
+ 
+ VITE_APP_NAME="${APP_NAME}"
++
++# Where the "Enter code" button in the password-reset email sends people.
++# Testing from a phone: use this computer's LAN address, NOT localhost (localhost on a phone is the phone).
++FRONTEND_URL=http://192.168.100.8:3000
+diff --git a/jobs-backend/app/Mail/PasswordOtpMail.php b/jobs-backend/app/Mail/PasswordOtpMail.php
+index 2d766f7..f9eb10f 100644
+--- a/jobs-backend/app/Mail/PasswordOtpMail.php
++++ b/jobs-backend/app/Mail/PasswordOtpMail.php
+@@ -36,8 +36,10 @@ public function content(): Content
+     }
+ 
+     /**
+-     * Button target: the "enter your code" page with the email already filled in.
+-     * The code itself is never put in a link (links end up in logs, scanners and previews).
++     * Button target: the "enter your code" page with the email in the query and the
++     * code in the URL fragment (#code=123456). A fragment is never sent to any server,
++     * so it stays out of access logs and Referer headers; the page reads it in the
++     * browser, fills the box and removes it from the address bar.
+      */
+     private function resetUrl(): ?string
+     {
+@@ -47,6 +49,7 @@ private function resetUrl(): ?string
+ 
+         return rtrim((string) config('app.frontend_url'), '/')
+             . '/reset-password?'
+-            . http_build_query(['email' => $this->email]);
++            . http_build_query(['email' => $this->email])
++            . '#code=' . rawurlencode($this->code);
+     }
+ }
+diff --git a/jobs-backend/tests/Feature/PasswordOtpMailTest.php b/jobs-backend/tests/Feature/PasswordOtpMailTest.php
+index 962397e..90546cc 100644
+--- a/jobs-backend/tests/Feature/PasswordOtpMailTest.php
++++ b/jobs-backend/tests/Feature/PasswordOtpMailTest.php
+@@ -30,6 +30,7 @@ public function test_forgot_password_sends_a_branded_single_use_code_email(): vo
+                 'code' => $mail->code,
+                 'minutes' => $mail->minutes,
+                 'name' => $mail->name,
++                'resetUrl' => 'http://x.test/reset-password?email=a#code=' . $mail->code,
+             ])->render();
+ 
+             return $mail->hasTo($user->email)
+@@ -42,8 +43,8 @@ public function test_forgot_password_sends_a_branded_single_use_code_email(): vo
+                 && str_contains($html, 'Here is your Applyra password reset verification code:')
+                 && str_contains($html, 'This code is valid for')
+                 && str_contains($html, 'Enter code on Applyra')
+-                && str_contains($html, '/reset-password?email=sara%40example.com')
+-                && preg_match('~reset-password[^"]*' . $mail->code . '~', $html) !== 1 // the code is never in a link
++                && str_contains($html, '/reset-password?email=sara%40example.com#code=' . $mail->code)
++                && !str_contains($html, 'code=' . $mail->code . '&') // fragment only, never in the query string
+                 && str_contains($text, $mail->code);
+         });
+     }
+diff --git a/jobs-frontend/components/auth/Field.js b/jobs-frontend/components/auth/Field.js
+index 4442143..543aa52 100644
+--- a/jobs-frontend/components/auth/Field.js
++++ b/jobs-frontend/components/auth/Field.js
+@@ -9,6 +9,9 @@ export default function Field({
+   hint,
+   required = true,
+   maxLength,
++  minLength,
++  inputMode,
++  pattern,
+   autoFocus = false,
+ }) {
+   const describedBy = error ? `${id}-err` : hint ? `${id}-hint` : undefined;
+@@ -24,6 +27,9 @@ export default function Field({
+         defaultValue={defaultValue}
+         required={required}
+         maxLength={maxLength}
++        minLength={minLength}
++        inputMode={inputMode}
++        pattern={pattern}
+         autoFocus={autoFocus}
+         aria-invalid={error ? 'true' : undefined}
+         aria-describedby={describedBy}
+diff --git a/jobs-frontend/components/auth/ResetOtpForm.js b/jobs-frontend/components/auth/ResetOtpForm.js
+index cb87f90..b06b870 100644
+--- a/jobs-frontend/components/auth/ResetOtpForm.js
++++ b/jobs-frontend/components/auth/ResetOtpForm.js
+@@ -1,6 +1,6 @@
+ "use client";
+ 
+-import { useActionState } from 'react';
++import { useActionState, useEffect } from 'react';
+ import { resetWithOtpAction } from '../../app/auth/otp-actions';
+ import Field from './Field';
+ import PasswordField from './PasswordField';
+@@ -12,6 +12,17 @@ export default function ResetOtpForm({ email }) {
+   const [state, action] = useActionState(resetWithOtpAction, INITIAL);
+   const top = state.error || state.errors.email;
+ 
++  // The email button opens /reset-password?email=...#code=123456. Read the code in the
++  // browser, fill the box, then drop the fragment so it does not stay in history.
++  useEffect(() => {
++    const m = /(?:^#|&)code=(\d{6})(?:&|$)/.exec(window.location.hash);
++    if (!m) return;
++    const input = document.getElementById('code');
++    if (input && !input.value) input.value = m[1];
++    window.history.replaceState(null, '', window.location.pathname + window.location.search);
++    document.getElementById('password')?.focus();
++  }, []);
++
+   return (
+     <form action={action} className="auth-form">
+       {top && <p className="alert" role="alert">{top}</p>}
+diff --git a/jobs-frontend/next.config.ts b/jobs-frontend/next.config.ts
+index 7a41fda..a221850 100644
+--- a/jobs-frontend/next.config.ts
++++ b/jobs-frontend/next.config.ts
+@@ -1,6 +1,11 @@
+ import type { NextConfig } from 'next';
+ 
+ const nextConfig: NextConfig = {
++  // Next 16 `next dev` refuses /_next/* (the JavaScript bundles) from any origin other than
++  // localhost. Opened from a phone at http://192.168.x.x:3000 the page then renders but never
++  // hydrates, so every client-side feature (forgot-password dialog, resend, show-password,
++  // chatbot) is dead. List your LAN here. Development only; ignored in production builds.
++  allowedDevOrigins: ['192.168.*.*', '10.*.*.*', '172.16.*.*', '*.local'],
+   devIndicators: false,
+   poweredByHeader: false,
+   async rewrites() {

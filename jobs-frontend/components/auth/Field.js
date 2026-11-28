@@ -9,6 +9,9 @@ export default function Field({
   hint,
   required = true,
   maxLength,
+  minLength,
+  inputMode,
+  pattern,
   autoFocus = false,
 }) {
   const describedBy = error ? `${id}-err` : hint ? `${id}-hint` : undefined;
@@ -24,6 +27,9 @@ export default function Field({
         defaultValue={defaultValue}
         required={required}
         maxLength={maxLength}
+        minLength={minLength}
+        inputMode={inputMode}
+        pattern={pattern}
         autoFocus={autoFocus}
         aria-invalid={error ? 'true' : undefined}
         aria-describedby={describedBy}

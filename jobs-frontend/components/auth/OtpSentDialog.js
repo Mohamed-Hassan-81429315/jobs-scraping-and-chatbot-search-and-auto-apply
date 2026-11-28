@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ResendCodeControl from './ResendCodeControl';
+import { listenForCode, stashCode } from '../../lib/otp-handoff';
 import styles from './OtpSentDialog.module.css';
 
 export default function OtpSentDialog({ email, sentAt }) {
@@ -45,6 +46,19 @@ export default function OtpSentDialog({ email, sentAt }) {
       root.style.paddingRight = previousPadding;
     };
   }, [isOpen]);
+
+  // The email button opens a new tab; that tab sends the code here. Move this same tab on to
+  // the code screen (the dialog closes with it) instead of leaving the user in two tabs.
+  useEffect(() => {
+    if (!email || !sentAt) return undefined;
+    return listenForCode(email, (code) => {
+      stashCode(email, code);
+      setDismissedSentAt(sentAt);
+      const params = new URLSearchParams({ email, sentAt: String(latestSentAtRef.current || sentAt) });
+      router.push(`/reset-password?${params.toString()}`);
+      try { window.focus(); } catch {}
+    });
+  }, [email, sentAt, router]);
 
   const handleResent = useCallback((timestamp) => {
     latestSentAtRef.current = timestamp;
