@@ -9,11 +9,21 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\File\UploadedFile as SymfonyUpload;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ProfileController extends Controller
 {
     private const DISK = 'local'; // private: files are served only through the endpoints below
+    private const PHOTO_MAX_KB = 3072; // 3 MB
+    private const CV_MAX_KB = 5120;    // 5 MB
+
+    // php.ini must allow at least this much, or PHP rejects the file before Laravel sees it:
+    //   upload_max_filesize = 8M     (largest single file)
+    //   post_max_size = 10M          (largest whole request; keep it above upload_max_filesize)
+    // These cannot be changed from code (PHP reads them before the script starts), so the
+    // controller reads the real values, never promises more than they allow, and says exactly
+    // what to change when a file is refused.
 
     public function show(Request $request): JsonResponse
     {
@@ -93,10 +103,12 @@ class ProfileController extends Controller
 
     public function uploadPhoto(Request $request): JsonResponse
     {
-        $request->validate(['photo' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:3072']], [
-            'photo.max' => 'The photo must be 3 MB or smaller.',
-            'photo.uploaded' => 'The upload failed. If the photo is under 3 MB, raise upload_max_filesize in php.ini (see the install notes).',
+        $this->rejectFailedUpload($request, 'photo');
+        $max = $this->allowedKb(self::PHOTO_MAX_KB);
+        $request->validate(['photo' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:' . $max]], [
+            'photo.max' => 'The photo must be ' . $this->mb($max) . ' or smaller.',
             'photo.mimes' => 'Use a JPG, PNG or WebP image.',
+            'photo.required' => 'Choose a photo to upload.',
         ]);
 
         $user = $request->user();
@@ -136,10 +148,12 @@ class ProfileController extends Controller
 
     public function uploadCv(Request $request): JsonResponse
     {
-        $request->validate(['cv' => ['required', 'file', 'mimes:pdf,docx', 'max:5120']], [
-            'cv.max' => 'The CV must be 5 MB or smaller.',
-            'cv.uploaded' => 'The upload failed. If the CV is under 5 MB, raise upload_max_filesize in php.ini (see the install notes).',
+        $this->rejectFailedUpload($request, 'cv');
+        $max = $this->allowedKb(self::CV_MAX_KB);
+        $request->validate(['cv' => ['required', 'file', 'mimes:pdf,docx', 'max:' . $max]], [
+            'cv.max' => 'The CV must be ' . $this->mb($max) . ' or smaller.',
             'cv.mimes' => 'Upload your CV as a PDF or DOCX file.',
+            'cv.required' => 'Choose a PDF or DOCX file to upload.',
         ]);
 
         $user = $request->user();
@@ -241,6 +255,60 @@ class ProfileController extends Controller
             'cv_name' => $user->cv_name,
             'cv_uploaded_at' => $user->cv_uploaded_at?->toIso8601String(),
         ];
+    }
+
+    /** Largest size (KB) we accept: our own cap, but never more than php.ini allows for one file. */
+    private function allowedKb(int $capKb): int
+    {
+        $ini = $this->iniBytes('upload_max_filesize');
+
+        return $ini > 0 ? min($capKb, intdiv($ini, 1024)) : $capKb;
+    }
+
+    private function mb(int $kb): string
+    {
+        return rtrim(rtrim(number_format($kb / 1024, 1), '0'), '.') . ' MB';
+    }
+
+    /** "8M" / "512K" / "1G" / "2097152" from php.ini, in bytes (0 = unlimited or unknown). */
+    private function iniBytes(string $key): int
+    {
+        $raw = trim((string) ini_get($key));
+        if ($raw === '' || $raw === '-1') {
+            return 0;
+        }
+        $n = (int) $raw;
+
+        return match (strtolower(substr($raw, -1))) {
+            'g' => $n * 1024 ** 3,
+            'm' => $n * 1024 ** 2,
+            'k' => $n * 1024,
+            default => $n,
+        };
+    }
+
+    /**
+     * PHP drops files it refuses (too big for php.ini, interrupted, no temp folder) before
+     * validation runs, which would otherwise surface as a vague "required". Explain the real cause.
+     */
+    private function rejectFailedUpload(Request $request, string $field): void
+    {
+        $file = $request->files->get($field);
+        if (!$file instanceof SymfonyUpload || $file->isValid()) {
+            return;
+        }
+
+        $message = match ($file->getError()) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => sprintf(
+                'The server refused this file because it is larger than its PHP limit (%s). Set upload_max_filesize = 8M and post_max_size = 10M in php.ini, then restart the server.',
+                ini_get('upload_max_filesize') ?: 'unknown'
+            ),
+            UPLOAD_ERR_PARTIAL => 'The upload was interrupted. Please try again.',
+            UPLOAD_ERR_NO_TMP_DIR, UPLOAD_ERR_CANT_WRITE => 'The server cannot store uploads right now (temporary folder is missing or not writable).',
+            default => 'The upload failed. Please try again.',
+        };
+
+        throw ValidationException::withMessages([$field => [$message]]);
     }
 
     private function forget(?string $path): void
